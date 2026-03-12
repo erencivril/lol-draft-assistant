@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --radius-panel: 16px;
+  --radius-card: 12px;
+}
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply m-0 min-h-screen bg-zinc-950 font-sans text-zinc-100;
+    background:
+      radial-gradient(circle at top left, rgba(34, 211, 238, 0.08), transparent 28%),
+      radial-gradient(circle at top right, rgba(245, 158, 11, 0.06), transparent 24%),
+      linear-gradient(180deg, #09090b 0%, #18181b 100%);
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+@layer components {
+  .toast {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: min(360px, calc(100vw - 32px));
+    max-width: 420px;
+    padding: 14px 16px;
+    border-radius: var(--radius-card);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+    animation:
+      toast-enter 0.22s ease-out,
+      toast-exit 0.28s ease-in 2.72s forwards;
+    backdrop-filter: blur(16px);
+  }
+
+  .toast-success {
+    background: rgba(20, 58, 52, 0.92);
+  }
+
+  .toast-error {
+    background: rgba(89, 31, 28, 0.94);
+  }
+
+  .toast-close {
+    margin-left: auto;
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgb(244 244 245);
+    cursor: pointer;
+  }
+
+  .error-boundary {
+    min-height: 280px;
+    display: grid;
+    align-content: center;
+    gap: 14px;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .loading-pulse {
+    width: 72px;
+    height: 72px;
+    border-radius: 24px;
+    background: linear-gradient(135deg, rgb(34 211 238 / 0.95), rgb(6 182 212 / 0.8));
+    box-shadow: 0 0 0 0 rgb(34 211 238 / 0.28);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(34 211 238 / 0.28);
+  }
+
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 18px rgb(34 211 238 / 0);
+  }
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-exit {
+  to {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}

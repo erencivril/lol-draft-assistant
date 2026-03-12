@@ -1,0 +1,64 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --app-dir
+      - /app/backend
+    env_file:
+      - ../.env
+    environment:
+      LDA_HOST: 0.0.0.0
+      LDA_ENABLE_LOCAL_LCU: "false"
+      LDA_ENABLE_REFRESH_SCHEDULER: "false"
+      LDA_ENABLE_BRIDGE_HOUSEKEEPING: "false"
+      LDA_DATABASE_PATH: /app/backend/data/lol_draft_assistant.db
+      LDA_FRONTEND_DIST: /app/frontend/dist
+    ports:
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:18080:8000"
+    volumes:
+      - lda_data:/app/backend/data
+      - lda_logs:/app/backend/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - python
+      - scripts/run_worker.py
+    env_file:
+      - ../.env
+    environment:
+      LDA_ENABLE_LOCAL_LCU: "false"
+      LDA_ENABLE_REFRESH_SCHEDULER: "true"
+      LDA_ENABLE_BRIDGE_HOUSEKEEPING: "false"
+      LDA_DATABASE_PATH: /app/backend/data/lol_draft_assistant.db
+      LDA_FRONTEND_DIST: /app/frontend/dist
+    volumes:
+      - lda_data:/app/backend/data
+      - lda_logs:/app/backend/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  lda_data:
+  lda_logs:

@@ -1,0 +1,90 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --app-dir
+      - /app/backend
+    env_file:
+      - ../.env
+    environment:
+      LDA_HOST: 0.0.0.0
+      LDA_ENABLE_LOCAL_LCU: "false"
+      LDA_ENABLE_REFRESH_SCHEDULER: "false"
+      LDA_ENABLE_BRIDGE_HOUSEKEEPING: "true"
+      LDA_DATABASE_PATH: /app/backend/data/lol_draft_assistant.db
+      LDA_FRONTEND_DIST: /app/frontend/dist
+    volumes:
+      - lda_data:/app/backend/data
+      - lda_logs:/app/backend/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - python
+      - scripts/run_worker.py
+    env_file:
+      - ../.env
+    environment:
+      LDA_ENABLE_LOCAL_LCU: "false"
+      LDA_ENABLE_REFRESH_SCHEDULER: "true"
+      LDA_ENABLE_BRIDGE_HOUSEKEEPING: "false"
+      LDA_DATABASE_PATH: /app/backend/data/lol_draft_assistant.db
+      LDA_FRONTEND_DIST: /app/frontend/dist
+    volumes:
+      - lda_data:/app/backend/data
+      - lda_logs:/app/backend/logs
+    mem_limit: 5g
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "18080:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  lda_data:
+  lda_logs:
+  caddy_data:
+  caddy_config:

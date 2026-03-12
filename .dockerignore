@@ -1,0 +1,15 @@
+.git
+.venv
+.pytest_cache
+backend/.pytest_cache
+backend/__pycache__
+frontend/node_modules
+frontend/dist
+frontend/frontend-dev.log
+backend/data
+backend/logs
+example_sources
+refactor-plan.md
+full-refresh*.log
+full-refresh*.err.log
+httpslolalytics.comlolnautilusbuildtier=grandmaster_plus.txt
