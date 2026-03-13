@@ -403,8 +403,9 @@ class RecommendationService:
         filters: ResolvedFilters,
         settings: UserSettings,
         draft_role_overrides: dict[tuple[str, int], str] | None = None,
+        target_cell_id: int | None = None,
     ) -> RecommendationBundle:
-        return (await self.analyze(draft_state, filters, settings, draft_role_overrides)).recommendations
+        return (await self.analyze(draft_state, filters, settings, draft_role_overrides, target_cell_id)).recommendations
 
     async def analyze(
         self,
@@ -412,6 +413,7 @@ class RecommendationService:
         filters: ResolvedFilters,
         settings: UserSettings,
         draft_role_overrides: dict[tuple[str, int], str] | None = None,
+        target_cell_id: int | None = None,
     ) -> RecommendationRuntimeSnapshot:
         await self.ensure_champion_lookup_ready()
         if self._rebuild_task and not self._rebuild_task.done():
@@ -436,13 +438,47 @@ class RecommendationService:
 
         region = normalize_region(filters.region) or filters.region
         rank_tier = normalize_rank_tier(filters.rank_tier) or filters.rank_tier
-        detected_local_role = normalize_role_name(draft_state.local_player_assigned_role)
-        local_role = normalize_role_name(filters.role) or detected_local_role or "middle"
+        overrides = draft_role_overrides or {}
+        scope_complete = self._scope_is_complete(region=region, rank_tier=rank_tier)
+        patch_warning = self._patch_warning(draft_state.patch)
+        patch_trusted = patch_warning is None
+        base_draft = self._hydrate_base_draft_state(draft_state)
+        local_slot = self._resolve_local_slot(
+            slots=base_draft.my_team_picks,
+            local_player_cell_id=base_draft.local_player_cell_id,
+        )
+        manual_local_role = normalize_role_name(settings.role_override) if settings.role_mode == "manual" else None
+        fallback_local_role = normalize_role_name(filters.role) or manual_local_role or "middle"
+        detected_local_role = normalize_role_name(local_slot.assigned_role if local_slot else draft_state.local_player_assigned_role)
+        local_role = manual_local_role or normalize_role_name(local_slot.effective_role if local_slot else None) or detected_local_role or fallback_local_role
+        my_team_slots = self._hydrate_local_slot(
+            slots=base_draft.my_team_picks,
+            local_player_cell_id=base_draft.local_player_cell_id,
+            local_role=local_role,
+            role_mode=settings.role_mode,
+            detected_local_role=detected_local_role,
+        )
+        resolved_target_cell_id = self._resolve_target_cell_id(
+            slots=my_team_slots,
+            requested_target_cell_id=target_cell_id,
+            local_player_cell_id=base_draft.local_player_cell_id,
+        )
+        target_slot = self._resolve_target_slot(slots=my_team_slots, target_cell_id=resolved_target_cell_id)
+        preview_target_role = normalize_role_name(filters.role) if target_cell_id is None else None
+        target_role = preview_target_role or normalize_role_name(target_slot.effective_role if target_slot else None) or normalize_role_name(
+            target_slot.assigned_role if target_slot else None
+        ) or local_role
+        role_collision_slot = self._find_role_collision_slot(
+            slots=my_team_slots,
+            overrides=overrides,
+            ignored_cell_id=resolved_target_cell_id,
+            role=target_role,
+        )
 
         if not await self.ensure_runtime_scope_ready(
             region=region,
             rank_tier=rank_tier,
-            relation_roles={local_role},
+            relation_roles={target_role},
         ):
             bundle = RecommendationBundle(
                 region=region,
@@ -461,36 +497,13 @@ class RecommendationService:
                 recommendations=bundle,
             )
 
-        overrides = draft_role_overrides or {}
-        scope_complete = self._scope_is_complete(region=region, rank_tier=rank_tier)
-        patch_warning = self._patch_warning(draft_state.patch)
-        patch_trusted = patch_warning is None
-        scope_runtime = await self._scope_runtime(region=region, rank_tier=rank_tier, role=local_role)
-
-        base_draft = self._hydrate_base_draft_state(draft_state)
-        my_team_slots = self._hydrate_local_slot(
-            slots=base_draft.my_team_picks,
-            local_player_cell_id=base_draft.local_player_cell_id,
-            local_role=local_role,
-            role_mode=settings.role_mode,
-            detected_local_role=detected_local_role,
-        )
-        role_collision_slot: TeamSlot | None = None
-        for slot in base_draft.my_team_picks:
-            if slot.is_local_player:
-                continue
-            assigned = normalize_role_name(slot.assigned_role)
-            manual_override = overrides.get(("ally", slot.cell_id))
-            effective = normalize_role_name(manual_override) or assigned
-            if effective == local_role and slot.champion_id:
-                role_collision_slot = slot
-                break
+        scope_runtime = await self._scope_runtime(region=region, rank_tier=rank_tier, role=target_role)
         ally_context = resolve_team_context(
             team="ally",
-            slots=[slot for slot in my_team_slots if not slot.is_local_player],
+            slots=[slot for slot in my_team_slots if slot.cell_id != resolved_target_cell_id],
             region=region,
             rank_tier=rank_tier,
-            reserved_roles={local_role} if role_collision_slot is None else set(),
+            reserved_roles={target_role},
             overrides=overrides,
             champion_lookup=self.champion_lookup,
             tier_index=self.tier_index,
@@ -510,7 +523,7 @@ class RecommendationService:
         await self.ensure_runtime_scope_ready(
             region=region,
             rank_tier=rank_tier,
-            relation_roles={local_role, *enemy_context.open_role_weights.keys()},
+            relation_roles={target_role, *enemy_context.open_role_weights.keys()},
         )
         resolved_draft_state = self._merge_draft_state(
             draft_state=base_draft,
@@ -523,15 +536,20 @@ class RecommendationService:
         excluded = set(resolved_draft_state.my_bans + resolved_draft_state.enemy_bans)
         excluded.update(
             slot.champion_id
-            for slot in resolved_draft_state.my_team_picks + resolved_draft_state.enemy_team_picks
+            for slot in resolved_draft_state.my_team_picks
+            if slot.champion_id and slot.cell_id != resolved_target_cell_id
+        )
+        excluded.update(
+            slot.champion_id
+            for slot in resolved_draft_state.enemy_team_picks
             if slot.champion_id
         )
 
-        scoped_filters = ResolvedFilters(region=region, rank_tier=rank_tier, role=local_role)
+        scoped_filters = ResolvedFilters(region=region, rank_tier=rank_tier, role=target_role)
         pick_candidates = self._collect_tier_candidates(
             region=region,
             rank_tier=rank_tier,
-            roles={local_role},
+            roles={target_role},
             excluded=excluded,
         )
         pick_drafts = [
@@ -572,18 +590,21 @@ class RecommendationService:
         bans = sorted(deduped_bans.values(), key=lambda item: item.total_score, reverse=True)
 
         warnings: list[str] = []
-        exact_data_available = self._scope_has_tier_data(region=region, rank_tier=rank_tier, role=local_role)
+        exact_data_available = self._scope_has_tier_data(region=region, rank_tier=rank_tier, role=target_role)
         if not exact_data_available:
-            warnings.append(f"No exact data for {region} / {rank_tier} / {local_role} on patch {self.patch or 'unknown'}.")
+            warnings.append(f"No exact data for {region} / {rank_tier} / {target_role} on patch {self.patch or 'unknown'}.")
         elif not scope_complete:
             warnings.append(f"Exact scope {region} / {rank_tier} is only partially scraped. Missing role data lowers coverage.")
 
         if settings.role_mode == "auto" and not detected_local_role:
             warnings.append(
-                f"Client did not expose your assigned role, so the saved role override '{local_role}' is being used."
+                f"Client did not expose your assigned role, so the saved local role override '{local_role}' is being used."
             )
-
-        if role_collision_slot is not None:
+        elif (
+            resolved_target_cell_id == base_draft.local_player_cell_id
+            and settings.role_mode == "manual"
+            and role_collision_slot is not None
+        ):
             collision_name = self._champion_name(role_collision_slot.champion_id) or "Teammate"
             warnings.append(
                 f"Your selected role '{local_role}' overlaps with {collision_name}'s assigned position. "
@@ -676,6 +697,56 @@ class RecommendationService:
                 )
             )
         return hydrated
+
+    def _resolve_local_slot(
+        self,
+        *,
+        slots: list[TeamSlot],
+        local_player_cell_id: int | None,
+    ) -> TeamSlot | None:
+        return next(
+            (slot for slot in slots if slot.is_local_player or slot.cell_id == local_player_cell_id),
+            None,
+        )
+
+    def _resolve_target_cell_id(
+        self,
+        *,
+        slots: list[TeamSlot],
+        requested_target_cell_id: int | None,
+        local_player_cell_id: int | None,
+    ) -> int:
+        if requested_target_cell_id is not None and any(slot.cell_id == requested_target_cell_id for slot in slots):
+            return requested_target_cell_id
+        local_slot = self._resolve_local_slot(slots=slots, local_player_cell_id=local_player_cell_id)
+        if local_slot is not None:
+            return local_slot.cell_id
+        return slots[0].cell_id if slots else 1
+
+    def _resolve_target_slot(
+        self,
+        *,
+        slots: list[TeamSlot],
+        target_cell_id: int,
+    ) -> TeamSlot | None:
+        return next((slot for slot in slots if slot.cell_id == target_cell_id), None)
+
+    def _find_role_collision_slot(
+        self,
+        *,
+        slots: list[TeamSlot],
+        overrides: dict[tuple[str, int], str],
+        ignored_cell_id: int,
+        role: str,
+    ) -> TeamSlot | None:
+        for slot in slots:
+            if slot.cell_id == ignored_cell_id or not slot.champion_id:
+                continue
+            override_role = normalize_role_name(overrides.get(("ally", slot.cell_id)))
+            effective_role = override_role or normalize_role_name(slot.effective_role) or normalize_role_name(slot.assigned_role)
+            if effective_role == role:
+                return slot
+        return None
 
     def _merge_draft_state(
         self,

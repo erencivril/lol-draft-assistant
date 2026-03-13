@@ -1,120 +1,107 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import App from "./App";
+import { buildRecommendPayload } from "./App";
+import type { DraftState } from "./types";
 
-const {
-  mockFetchChampions,
-  mockFetchStatus,
-  mockGetApiBaseUrl,
-  mockRecommendDraft,
-} = vi.hoisted(() => ({
-  mockFetchChampions: vi.fn(),
-  mockFetchStatus: vi.fn(),
-  mockGetApiBaseUrl: vi.fn(),
-  mockRecommendDraft: vi.fn(),
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(),
 }));
 
-vi.mock("./api/client", () => ({
-  fetchChampions: mockFetchChampions,
-  fetchStatus: mockFetchStatus,
-  getApiBaseUrl: mockGetApiBaseUrl,
-  recommendDraft: mockRecommendDraft,
-}));
+describe("buildRecommendPayload", () => {
+  it("keeps the local slot in the payload while targeting another ally slot", () => {
+    const draftState: DraftState = {
+      phase: "BAN_PICK",
+      local_player_cell_id: 3,
+      local_player_assigned_role: "middle",
+      local_player_effective_role: "middle",
+      current_actor_cell_id: 3,
+      current_action_type: "pick",
+      my_team_picks: [
+        {
+          cell_id: 1,
+          champion_id: 0,
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+          is_local_player: false,
+        },
+        {
+          cell_id: 2,
+          champion_id: 0,
+          assigned_role: "jungle",
+          effective_role: "jungle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "jungle", confidence: 1 }],
+          is_local_player: false,
+        },
+        {
+          cell_id: 3,
+          champion_id: 7,
+          champion_name: "LeBlanc",
+          assigned_role: "middle",
+          effective_role: "middle",
+          role_source: "lcu",
+          role_confidence: 1,
+          role_candidates: [{ role: "middle", confidence: 1 }],
+          is_local_player: true,
+        },
+        {
+          cell_id: 4,
+          champion_id: 0,
+          assigned_role: "bottom",
+          effective_role: "bottom",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "bottom", confidence: 1 }],
+          is_local_player: false,
+        },
+        {
+          cell_id: 5,
+          champion_id: 0,
+          assigned_role: "support",
+          effective_role: "support",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "support", confidence: 1 }],
+          is_local_player: false,
+        },
+      ],
+      enemy_team_picks: [
+        {
+          cell_id: 6,
+          champion_id: 238,
+          champion_name: "Zed",
+          assigned_role: "middle",
+          effective_role: "middle",
+          role_source: "lcu",
+          role_confidence: 1,
+          role_candidates: [{ role: "middle", confidence: 1 }],
+          is_local_player: false,
+        },
+      ],
+      my_team_declared_roles: ["top", "jungle", "middle", "bottom", "support"],
+      enemy_team_declared_roles: ["middle"],
+      my_bans: [0, 0, 0, 0, 0],
+      enemy_bans: [0, 0, 0, 0, 0],
+      session_status: "active",
+      patch: "16.5.1",
+      queue_type: "RANKED_SOLO_5x5",
+      is_local_players_turn: true,
+    };
 
-vi.mock("./components/AnalysisFiltersPanel", () => ({
-  AnalysisFiltersPanel: () => <div data-testid="analysis-filters" />,
-}));
+    const payload = buildRecommendPayload({ region: "TR", rank_tier: "emerald" }, draftState, 4);
 
-vi.mock("./components/ConnectionStatus", () => ({
-  ConnectionStatus: () => <div data-testid="connection-status" />,
-}));
-
-vi.mock("./components/DraftBoard", () => ({
-  DraftBoard: () => <div data-testid="draft-board" />,
-}));
-
-vi.mock("./components/PhaseIndicator", () => ({
-  PhaseIndicator: () => null,
-}));
-
-vi.mock("./components/RecommendationPanel", () => ({
-  RecommendationPanel: () => <div data-testid="recommendation-panel" />,
-}));
-
-vi.mock("./components/Toast", () => ({
-  Toast: () => null,
-}));
-
-describe("App bootstrap", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    window.localStorage.clear();
-    mockGetApiBaseUrl.mockReturnValue("http://neco-vps:18080");
-    mockFetchStatus.mockResolvedValue({
-      lcu_connected: false,
-      effective_region: "TR",
-      effective_rank_tier: "emerald",
-      effective_role: "middle",
-      exact_data_available: true,
-      patch_trusted: true,
-      scope_complete: true,
-      scope_ready: true,
-      recommendation_warnings: [],
-      draft_phase: "MANUAL",
-      latest_patch: "16.5.1",
-      storage: {
-        champion_count: 3,
-        tier_stats_count: 0,
-        matchups_count: 0,
-        synergies_count: 0,
-        latest_patch: "16.5.1",
-        data_patches: ["16.5.1"],
-        historical_rows: 0,
-        latest_data_fetch_at: null,
-      },
-    });
-    mockFetchChampions.mockResolvedValue([
-      {
-        champion_id: 103,
-        key: "Ahri",
-        name: "Ahri",
-        image_url: "https://example.com/ahri.png",
-        roles: ["middle"],
-        patch: "16.5.1",
-      },
-    ]);
-    mockRecommendDraft.mockResolvedValue({
-      picks: [],
-      bans: [],
-      exact_data_available: true,
-      patch_trusted: true,
-      scope_complete: true,
-      scope_ready: true,
-      scope_last_synced_at: null,
-      scope_freshness: "fresh",
-      fallback_used_recently: false,
-      warnings: [],
-      generated_at: new Date().toISOString(),
-    });
-  });
-
-  it("loads Hetzner data and requests recommendations for the current draft state", async () => {
-    render(<App />);
-
-    await screen.findByText("Tauri desk client");
-
-    await waitFor(() => {
-      expect(mockRecommendDraft).toHaveBeenCalledWith({
-        region: "TR",
-        rank_tier: "emerald",
+    expect(payload.target_cell_id).toBe(4);
+    expect(payload.ally_slots).toHaveLength(5);
+    expect(payload.enemy_slots).toHaveLength(1);
+    expect(payload.ally_slots).toContainEqual(
+      expect.objectContaining({
+        cell_id: 3,
+        champion_id: 7,
         role: "middle",
-        ally_picks: [],
-        enemy_picks: [],
-        bans: [],
-      });
-    });
-
-    expect(screen.getByTestId("connection-status")).toBeInTheDocument();
-    expect(screen.getByTestId("draft-board")).toBeInTheDocument();
-    expect(screen.getByTestId("recommendation-panel")).toBeInTheDocument();
+        is_local_player: true,
+      })
+    );
   });
 });

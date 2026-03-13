@@ -1,9 +1,8 @@
-import { rankOptions, regionOptions, roleOptions } from "../constants/filters";
+import { rankOptions, regionOptions } from "../constants/filters";
 
 export type AnalysisFilters = {
   region: string;
   rank_tier: string;
-  role: string;
 };
 
 type AnalysisFiltersPanelProps = {
@@ -28,7 +27,7 @@ export function AnalysisFiltersPanel({ filters, disabled = false, onChange }: An
         </span>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <label className="grid gap-1.5 text-xs font-medium text-zinc-400">
           Region
           <select
@@ -56,23 +55,6 @@ export function AnalysisFiltersPanel({ filters, disabled = false, onChange }: An
             onChange={(event) => onChange({ ...filters, rank_tier: event.target.value })}
           >
             {rankOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="grid gap-1.5 text-xs font-medium text-zinc-400">
-          Role
-          <select
-            aria-label="Analysis role"
-            className={selectClass}
-            disabled={disabled}
-            value={filters.role}
-            onChange={(event) => onChange({ ...filters, role: event.target.value })}
-          >
-            {roleOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>

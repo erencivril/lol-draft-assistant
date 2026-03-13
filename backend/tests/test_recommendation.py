@@ -6,10 +6,12 @@ from math import tanh
 import aiosqlite
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
 from app.domain.draft import DraftState, TeamSlot
 from app.domain.settings import ResolvedFilters, UserSettings
+from app.routers.recommend import RecommendRequest
 from app.services.recommendation_service import RecommendationService
 
 
@@ -2454,3 +2456,219 @@ async def test_recommendation_uses_inferred_enemy_role_probabilities_in_counter_
     assert bundle.picks[0].champion_id == 10
     assert bundle.picks[0].counter_score > bundle.picks[1].counter_score
     assert bundle.picks[0].explanation.counters[0].role == "top"
+
+
+@pytest.mark.asyncio
+async def test_recommendation_keeps_local_pick_in_synergy_when_targeting_other_ally_slot(
+    repository: DatabaseRepository,
+) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="LeBlanc", name="LeBlanc", image_url="", roles=["middle"], patch=patch),
+            ChampionRecord(champion_id=20, key="JarvanIV", name="Jarvan IV", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=21, key="Sejuani", name="Sejuani", image_url="", roles=["jungle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald",
+        role="jungle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=20,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                win_rate=51.9,
+                pick_rate=7.6,
+                ban_rate=2.8,
+                tier_grade="A",
+                tier_rank=4,
+                pbi=22.0,
+                games=18000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=21,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                win_rate=52.0,
+                pick_rate=7.8,
+                ban_rate=4.1,
+                tier_grade="S",
+                tier_rank=3,
+                pbi=23.0,
+                games=21000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_synergies(
+        region="TR",
+        rank_tier="emerald",
+        role="jungle",
+        patch=patch,
+        records=[
+            SynergyRecord(
+                champion_id=20,
+                teammate_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                teammate_role="middle",
+                duo_win_rate=58.4,
+                synergy_delta=4.8,
+                normalised_delta=22.0,
+                games=2200,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+            SynergyRecord(
+                champion_id=21,
+                teammate_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                teammate_role="middle",
+                duo_win_rate=50.1,
+                synergy_delta=0.1,
+                normalised_delta=0.0,
+                games=2400,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="middle",
+            my_team_picks=[
+                TeamSlot(cell_id=1, champion_id=1, assigned_role="middle", is_local_player=True),
+                TeamSlot(cell_id=2, champion_id=0, assigned_role="jungle"),
+            ],
+            enemy_team_picks=[],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald"),
+        settings=UserSettings(top_n=2),
+        target_cell_id=2,
+    )
+
+    assert bundle.picks[0].champion_id == 20
+    assert all(item.suggested_role == "jungle" for item in bundle.picks[:2])
+    assert bundle.picks[0].synergy_score > bundle.picks[1].synergy_score
+
+
+@pytest.mark.asyncio
+async def test_recommendation_treats_target_slot_pick_as_replaceable(
+    repository: DatabaseRepository,
+) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="LeBlanc", name="LeBlanc", image_url="", roles=["middle"], patch=patch),
+            ChampionRecord(champion_id=20, key="JarvanIV", name="Jarvan IV", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=21, key="Sejuani", name="Sejuani", image_url="", roles=["jungle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald",
+        role="jungle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=20,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                win_rate=52.4,
+                pick_rate=8.0,
+                ban_rate=3.4,
+                tier_grade="S",
+                tier_rank=1,
+                pbi=25.0,
+                games=21000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=21,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                win_rate=51.8,
+                pick_rate=7.4,
+                ban_rate=2.9,
+                tier_grade="A",
+                tier_rank=6,
+                pbi=18.0,
+                games=19000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-13T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="middle",
+            my_team_picks=[
+                TeamSlot(cell_id=1, champion_id=1, assigned_role="middle", is_local_player=True),
+                TeamSlot(cell_id=2, champion_id=20, assigned_role="jungle"),
+            ],
+            enemy_team_picks=[],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald"),
+        settings=UserSettings(top_n=2),
+        target_cell_id=2,
+    )
+
+    assert [item.champion_id for item in bundle.picks[:2]] == [20, 21]
+
+
+def test_recommend_request_rejects_invalid_target_cell_id() -> None:
+    with pytest.raises(ValidationError):
+        RecommendRequest.model_validate(
+            {
+                "region": "TR",
+                "rank_tier": "emerald",
+                "target_cell_id": 4,
+                "ally_slots": [
+                    {"cell_id": 1, "champion_id": 1, "role": "middle", "is_local_player": True},
+                    {"cell_id": 2, "champion_id": 0, "role": "jungle", "is_local_player": False},
+                ],
+                "enemy_slots": [],
+                "bans": [],
+            }
+        )

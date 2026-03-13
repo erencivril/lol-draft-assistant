@@ -123,8 +123,12 @@ describe("DraftBoard", () => {
         champions={champions}
         draftState={draftState}
         lcuConnected
+        targetCellId={3}
+        localPlayerCellId={3}
         onSlotChampionChange={vi.fn()}
         onSlotRoleChange={vi.fn()}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
         onBanChange={vi.fn()}
       />
     );
@@ -142,8 +146,12 @@ describe("DraftBoard", () => {
         champions={champions}
         draftState={draftState}
         lcuConnected={false}
+        targetCellId={3}
+        localPlayerCellId={3}
         onSlotChampionChange={vi.fn()}
         onSlotRoleChange={onSlotRoleChange}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
         onBanChange={vi.fn()}
       />
     );
@@ -173,8 +181,12 @@ describe("DraftBoard", () => {
         champions={champions}
         draftState={unknownRoleDraftState}
         lcuConnected
+        targetCellId={3}
+        localPlayerCellId={3}
         onSlotChampionChange={vi.fn()}
         onSlotRoleChange={vi.fn()}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
         onBanChange={vi.fn()}
       />
     );
@@ -193,8 +205,12 @@ describe("DraftBoard", () => {
         champions={champions}
         draftState={draftState}
         lcuConnected={false}
+        targetCellId={3}
+        localPlayerCellId={3}
         onSlotChampionChange={onSlotChampionChange}
         onSlotRoleChange={vi.fn()}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
         onBanChange={vi.fn()}
       />
     );
@@ -205,5 +221,33 @@ describe("DraftBoard", () => {
     await user.click(screen.getByRole("button", { name: /Thresh/i }));
 
     expect(onSlotChampionChange).toHaveBeenCalledWith("enemy", 6, 412);
+  });
+
+  it("lets the user retarget recommendations without changing the local role control", async () => {
+    const user = userEvent.setup();
+    const onTargetSlotChange = vi.fn();
+    const onSlotRoleChange = vi.fn();
+
+    render(
+      <DraftBoard
+        champions={champions}
+        draftState={draftState}
+        lcuConnected
+        targetCellId={2}
+        localPlayerCellId={3}
+        onSlotChampionChange={vi.fn()}
+        onSlotRoleChange={onSlotRoleChange}
+        onTargetSlotChange={onTargetSlotChange}
+        onRecommendForMe={vi.fn()}
+        onBanChange={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Analyze Your slot" }));
+    await user.selectOptions(screen.getByLabelText("Your slot role"), "support");
+
+    expect(onTargetSlotChange).toHaveBeenCalledWith(3);
+    expect(onSlotRoleChange).toHaveBeenCalledWith("ally", 3, "support");
+    expect(screen.getByText("Target: Ally 2")).toBeInTheDocument();
   });
 });

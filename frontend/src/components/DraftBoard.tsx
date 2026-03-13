@@ -10,8 +10,13 @@ type DraftBoardProps = {
   champions: ChampionCatalogItem[];
   draftState: DraftState;
   lcuConnected: boolean;
+  targetCellId: number;
+  localPlayerCellId: number;
+  hasOverrides?: boolean;
   onSlotChampionChange: (team: TeamName, cellId: number, championId: number) => void;
   onSlotRoleChange: (team: TeamName, cellId: number, role: string) => void;
+  onTargetSlotChange: (cellId: number) => void;
+  onRecommendForMe: () => void;
   onBanChange: (team: TeamName, index: number, championId: number) => void;
   onResetOverrides?: () => void;
 };
@@ -49,23 +54,41 @@ function SlotCard({
   slot,
   title,
   lcuConnected,
+  isTarget = false,
   currentActorCellId,
   currentActionType,
   onOpenPicker,
   onRoleChange,
+  onSelectTarget,
 }: {
   slot: TeamSlot;
   title: string;
   lcuConnected: boolean;
+  isTarget?: boolean;
   currentActorCellId?: number | null;
   currentActionType?: string | null;
   onOpenPicker: () => void;
   onRoleChange: (role: string) => void;
+  onSelectTarget?: () => void;
 }) {
   const championSelected = slot.champion_id > 0;
   const isCurrentActor = currentActorCellId === slot.cell_id;
   const actionLabel = currentActionType?.toLowerCase() === "ban" ? "Banning now" : "Picking now";
   const disabledPicker = slot.is_local_player && !championSelected;
+  const subtitle = slot.is_local_player
+    ? isTarget
+      ? "Local + recommendation target"
+      : "Local slot"
+    : isTarget
+      ? "Recommendation target"
+      : "Editable slot";
+  const emptyStateCopy = slot.is_local_player
+    ? isTarget
+      ? "Recommendations use your role slot."
+      : "Your role stays fixed while you inspect another ally slot."
+    : isTarget
+      ? "Recommendations are generated for this slot."
+      : "Search the full champion pool";
 
   return (
     <article
@@ -78,17 +101,24 @@ function SlotCard({
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">{title}</p>
-          <p className="text-xs text-zinc-400">{slot.is_local_player ? "Recommendation slot" : "Editable slot"}</p>
+          <p className="text-xs text-zinc-400">{subtitle}</p>
         </div>
-        {slot.is_local_player ? (
-          <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            You
-          </span>
-        ) : lcuConnected ? (
-          <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-            LCU + Override
-          </span>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {slot.is_local_player ? (
+            <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+              You
+            </span>
+          ) : lcuConnected ? (
+            <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              LCU + Override
+            </span>
+          ) : null}
+          {isTarget ? (
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
+              Target
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <button
@@ -118,7 +148,7 @@ function SlotCard({
                 : "Select champion"}
           </p>
           <p className="mt-1 text-xs text-zinc-400">
-            {championSelected ? "Click to change selection" : slot.is_local_player ? "Recommendations use this role slot." : "Search the full champion pool"}
+            {championSelected ? "Click to change selection" : emptyStateCopy}
           </p>
           {isCurrentActor ? (
             <p className="mt-2 text-[11px] font-medium text-cyan-300">{actionLabel}</p>
@@ -131,7 +161,6 @@ function SlotCard({
         <select
           aria-label={`${title} role`}
           className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
-          disabled={slot.is_local_player}
           value={slot.effective_role ?? slot.assigned_role ?? unknownRoleValue}
           onChange={(event) =>
             onRoleChange(event.target.value === unknownRoleValue ? "" : event.target.value)
@@ -146,9 +175,26 @@ function SlotCard({
         </select>
       </label>
 
-      <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
+      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
         <span>{roleLabel(slot.effective_role ?? slot.assigned_role)}</span>
-        <span>{slot.role_source === "manual" ? "Manual" : slot.role_source.toUpperCase()}</span>
+        <div className="flex items-center gap-3">
+          <span>{slot.role_source === "manual" ? "Manual" : slot.role_source.toUpperCase()}</span>
+          {onSelectTarget ? (
+            <button
+              type="button"
+              aria-label={`Analyze ${title}`}
+              aria-pressed={isTarget}
+              className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors ${
+                isTarget
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                  : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+              }`}
+              onClick={onSelectTarget}
+            >
+              {isTarget ? "Target" : "Analyze"}
+            </button>
+          ) : null}
+        </div>
       </div>
     </article>
   );
@@ -236,8 +282,13 @@ export function DraftBoard({
   champions,
   draftState,
   lcuConnected,
+  targetCellId,
+  localPlayerCellId,
+  hasOverrides = false,
   onSlotChampionChange,
   onSlotRoleChange,
+  onTargetSlotChange,
+  onRecommendForMe,
   onBanChange,
   onResetOverrides,
 }: DraftBoardProps) {
@@ -257,6 +308,8 @@ export function DraftBoard({
 
   const allyBans = [...draftState.my_bans, ...Array.from({ length: Math.max(0, 5 - draftState.my_bans.length) }, () => 0)];
   const enemyBans = [...draftState.enemy_bans, ...Array.from({ length: Math.max(0, 5 - draftState.enemy_bans.length) }, () => 0)];
+  const targetSlot = draftState.my_team_picks.find((slot) => slot.cell_id === targetCellId);
+  const targetLabel = targetSlot?.is_local_player ? "Your slot" : targetSlot ? `Ally ${targetSlot.cell_id}` : "Your slot";
 
   return (
     <div className="space-y-4">
@@ -265,16 +318,28 @@ export function DraftBoard({
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-400">Draft Board</p>
             <h2 className="text-lg font-semibold text-zinc-100">{lcuConnected ? "LCU auto-fill active" : "Manual draft mode"}</h2>
+            <p className="mt-1 text-xs text-zinc-500">Target: {targetLabel}</p>
           </div>
-          {lcuConnected && onResetOverrides ? (
-            <button
-              type="button"
-              className="rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
-              onClick={onResetOverrides}
-            >
-              Clear overrides
-            </button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {targetCellId !== localPlayerCellId ? (
+              <button
+                type="button"
+                className="rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+                onClick={onRecommendForMe}
+              >
+                Recommend for me
+              </button>
+            ) : null}
+            {hasOverrides && onResetOverrides ? (
+              <button
+                type="button"
+                className="rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+                onClick={onResetOverrides}
+              >
+                Clear overrides
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
@@ -288,8 +353,9 @@ export function DraftBoard({
                 <SlotCard
                   key={`ally-${slot.cell_id}`}
                   slot={slot}
-                  title={slot.is_local_player ? "Your role" : `Ally ${slot.cell_id}`}
+                  title={slot.is_local_player ? "Your slot" : `Ally ${slot.cell_id}`}
                   lcuConnected={lcuConnected}
+                  isTarget={slot.cell_id === targetCellId}
                   currentActorCellId={draftState.current_actor_cell_id}
                   currentActionType={draftState.current_action_type}
                   onOpenPicker={() =>
@@ -303,6 +369,7 @@ export function DraftBoard({
                     })
                   }
                   onRoleChange={(role) => onSlotRoleChange("ally", slot.cell_id, role)}
+                  onSelectTarget={() => onTargetSlotChange(slot.cell_id)}
                 />
               ))}
             </div>

@@ -9,7 +9,7 @@ describe("AnalysisFiltersPanel", () => {
 
     render(
       <AnalysisFiltersPanel
-        filters={{ region: "TR", rank_tier: "silver", role: "middle" }}
+        filters={{ region: "TR", rank_tier: "silver" }}
         onChange={onChange}
       />
     );
@@ -19,14 +19,13 @@ describe("AnalysisFiltersPanel", () => {
     expect(onChange).toHaveBeenCalledWith({
       region: "TR",
       rank_tier: "emerald_plus",
-      role: "middle",
     });
   });
 
   it("disables the controls when requested", () => {
     render(
       <AnalysisFiltersPanel
-        filters={{ region: "TR", rank_tier: "silver", role: "middle" }}
+        filters={{ region: "TR", rank_tier: "silver" }}
         disabled
         onChange={vi.fn()}
       />
@@ -34,6 +33,5 @@ describe("AnalysisFiltersPanel", () => {
 
     expect(screen.getByLabelText("Analysis region")).toBeDisabled();
     expect(screen.getByLabelText("Analysis rank")).toBeDisabled();
-    expect(screen.getByLabelText("Analysis role")).toBeDisabled();
   });
 });

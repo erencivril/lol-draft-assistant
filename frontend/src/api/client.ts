@@ -9,18 +9,19 @@ export type ChampionCatalogItem = {
   patch: string;
 };
 
+export type RecommendSlotPayload = {
+  cell_id: number;
+  champion_id: number;
+  role?: string | null;
+  is_local_player?: boolean;
+};
+
 export type RecommendPayload = {
   region: string;
   rank_tier: string;
-  role: string;
-  enemy_picks: Array<{
-    champion_id: number;
-    role?: string | null;
-  }>;
-  ally_picks: Array<{
-    champion_id: number;
-    role?: string | null;
-  }>;
+  target_cell_id: number;
+  enemy_slots: RecommendSlotPayload[];
+  ally_slots: RecommendSlotPayload[];
   bans: number[];
 };
 
