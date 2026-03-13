@@ -16,19 +16,20 @@ from .scoring_constants import (
     BAN_WEIGHT_ROLE_LIKELIHOOD,
     BAN_WEIGHT_SYNERGY,
     BAN_WEIGHT_TIER,
-    COUNTER_BUDGET_BASE,
-    COUNTER_BUDGET_CAP,
-    COUNTER_BUDGET_PER_ENEMY,
     COUNTER_EDGE_SCALE,
     DISPLAY_BAND_ELITE,
     DISPLAY_BAND_SITUATIONAL,
     DISPLAY_BAND_STRONG,
-    EVIDENCE_BASE_MULTIPLIER,
-    EVIDENCE_COVERAGE_WEIGHT,
     LANE_PROXIMITY,
-    LATE_DRAFT_COUNTER_BOOST_MAX,
     MATCHUP_SHRINKAGE_PRIOR,
     PBI_NORMALIZATION_SCALE,
+    PICK_COUNTER_BAND_WINDOW,
+    PICK_COUNTER_MISSING_COVERAGE_PENALTY,
+    PICK_HIERARCHY_BOARD_COUNTER_WEIGHT,
+    PICK_HIERARCHY_CONFIDENCE_WEIGHT,
+    PICK_HIERARCHY_SYNERGY_WEIGHT,
+    PICK_HIERARCHY_TIER_WEIGHT,
+    PICK_HIERARCHY_WORST_ENEMY_WEIGHT,
     PREDRAFT_WEIGHT_PBI,
     PREDRAFT_WEIGHT_ROLE_FIT,
     PREDRAFT_WEIGHT_TIER,
@@ -37,9 +38,6 @@ from .scoring_constants import (
     ROLE_FIT_HIGH_PICK_RATE,
     ROLE_FIT_MEDIUM_PICK_RATE,
     SAMPLE_THRESHOLD_IGNORE,
-    SYNERGY_BUDGET_BASE,
-    SYNERGY_BUDGET_CAP,
-    SYNERGY_BUDGET_PER_ALLY,
     SYNERGY_EDGE_SCALE,
     SYNERGY_SHRINKAGE_PRIOR,
     TIER_GAMES_HIGH,
@@ -80,7 +78,10 @@ class RelationInsight:
 @dataclass(slots=True)
 class RelationSummary:
     score: float
+    raw_score: float
+    worst_score: float
     coverage: float
+    coverage_penalty: float
     sample_confidence: float
     details: list[str]
     insights: list[RelationInsight]
@@ -120,6 +121,10 @@ def normalize_synergy(record: SynergyRecord | None) -> float:
     # Bayesian shrinkage: low-sample synergies are pulled toward 0
     shrinkage = record.games / (record.games + SYNERGY_SHRINKAGE_PRIOR)
     return tanh(record.normalised_delta * shrinkage / SYNERGY_EDGE_SCALE)
+
+
+def clamp_relation_score(value: float) -> float:
+    return max(-1.0, min(1.0, value))
 
 
 def sample_confidence(games: int) -> float:
@@ -226,12 +231,24 @@ def summarize_relations(
     detail_builder: Callable[[TeamSlot, str, MatchupRecord | SynergyRecord, float, float, float], RelationInsight],
     sample_penalty_note_fn: Callable[[TeamSlot, str, int, float], str],
     candidate_role: str | None = None,
+    missing_penalty_scale: float = 0.0,
 ) -> RelationSummary:
     if not slots:
-        return RelationSummary(score=0.0, coverage=0.0, sample_confidence=1.0, details=[], insights=[])
+        return RelationSummary(
+            score=0.0,
+            raw_score=0.0,
+            worst_score=0.0,
+            coverage=0.0,
+            coverage_penalty=0.0,
+            sample_confidence=1.0,
+            details=[],
+            insights=[],
+        )
 
+    raw_slot_scores: list[float] = []
     slot_scores: list[float] = []
     coverage_total = 0.0
+    coverage_penalty_total = 0.0
     sample_total = 0.0
     details: list[str] = []
     insights: list[RelationInsight] = []
@@ -266,7 +283,10 @@ def summarize_relations(
                 thin_evidence_notes.append(
                     sample_penalty_note_fn(slot, matched_role, record.games, sc)
                 )
-        slot_scores.append(slot_score)
+        raw_slot_scores.append(clamp_relation_score(slot_score))
+        slot_penalty = max(0.0, 1.0 - slot_coverage) * missing_penalty_scale
+        coverage_penalty_total += slot_penalty
+        slot_scores.append(clamp_relation_score(slot_score - slot_penalty))
         coverage_total += slot_coverage
         sample_total += slot_sample
         if best_insight:
@@ -274,13 +294,19 @@ def summarize_relations(
             details.append(best_insight.summary)
 
     coverage = coverage_total / len(slots) if slots else 1.0
+    coverage_penalty = coverage_penalty_total / len(slots) if slots else 0.0
     sc_result = sample_total / coverage_total if coverage_total else 0.0
+    raw_score = ((sum(raw_slot_scores) / len(slots)) if slots else 0.0) * certainty_multiplier
     score = ((sum(slot_scores) / len(slots)) if slots else 0.0) * certainty_multiplier
+    worst_score = (min(raw_slot_scores) if raw_slot_scores else 0.0) * certainty_multiplier
     sorted_insights = sorted(insights, key=lambda item: abs(item.net_contribution), reverse=True)
     top_games = sorted_insights[0].games if sorted_insights else None
     return RelationSummary(
-        score=score,
+        score=clamp_relation_score(score),
+        raw_score=clamp_relation_score(raw_score),
+        worst_score=clamp_relation_score(worst_score),
         coverage=coverage,
+        coverage_penalty=coverage_penalty,
         sample_confidence=sc_result,
         details=details,
         insights=sorted_insights,
@@ -293,49 +319,36 @@ def compose_pick_score(
     *,
     record: TierStatRecord,
     counter_score: float,
+    worst_enemy_score: float,
+    counter_coverage_penalty: float,
+    tier_secondary_score: float,
     synergy_score: float,
     enemy_count: int,
     ally_count: int,
     low_sample_penalty_val: float,
-    draft_progress: float = 0.0,
 ) -> ScoreComposition:
-    # Late-draft boost: when more champions are visible, counter info is more reliable
-    late_boost = 1.0 + (draft_progress * LATE_DRAFT_COUNTER_BOOST_MAX)
-    counter_budget = 0.0 if enemy_count <= 0 else min(COUNTER_BUDGET_CAP, (COUNTER_BUDGET_BASE + COUNTER_BUDGET_PER_ENEMY * enemy_count) * late_boost)
-    synergy_budget = 0.0 if ally_count <= 0 else min(SYNERGY_BUDGET_CAP, SYNERGY_BUDGET_BASE + (SYNERGY_BUDGET_PER_ALLY * ally_count))
-    relation_budget = counter_budget + synergy_budget
-    base_weight = max(0.0, 1.0 - relation_budget)
-    parts = [
-        ScorePart(key="tier_rank", label="Tier base", value=tier_rank_score(record), weight=PREDRAFT_WEIGHT_TIER_RANK * base_weight),
-        ScorePart(key="tier", label="Tier strength", value=tier_score(record), weight=PREDRAFT_WEIGHT_TIER * base_weight),
-        ScorePart(key="pbi", label="PBI", value=pbi_score(record), weight=PREDRAFT_WEIGHT_PBI * base_weight),
-        ScorePart(key="role_fit", label="Role fit", value=role_fit_score(record), weight=PREDRAFT_WEIGHT_ROLE_FIT * base_weight),
-    ]
-    if enemy_count > 0:
-        parts.append(
-            ScorePart(
-                key="counter",
-                label="Counter edge",
-                value=counter_score,
-                weight=counter_budget,
-                note="Signed Delta2 expectation over visible enemies",
+    if enemy_count <= 0:
+        synergy_weight = 0.12 if ally_count > 0 else 0.0
+        base_weight = max(0.0, 1.0 - synergy_weight)
+        parts = [
+            ScorePart(key="tier_rank", label="Tier base", value=tier_rank_score(record), weight=PREDRAFT_WEIGHT_TIER_RANK * base_weight),
+            ScorePart(key="tier", label="Tier strength", value=tier_score(record), weight=PREDRAFT_WEIGHT_TIER * base_weight),
+            ScorePart(key="pbi", label="PBI", value=pbi_score(record), weight=PREDRAFT_WEIGHT_PBI * base_weight),
+            ScorePart(key="role_fit", label="Role fit", value=role_fit_score(record), weight=PREDRAFT_WEIGHT_ROLE_FIT * base_weight),
+        ]
+        if ally_count > 0:
+            parts.append(
+                ScorePart(
+                    key="synergy",
+                    label="Team synergy",
+                    value=synergy_score,
+                    weight=synergy_weight,
+                    note="Signed normalized synergy expectation over visible allies",
+                )
             )
-        )
-    if ally_count > 0:
-        parts.append(
-            ScorePart(
-                key="synergy",
-                label="Team synergy",
-                value=synergy_score,
-                weight=synergy_budget,
-                note="Signed normalized synergy expectation over visible allies",
-            )
-        )
-    raw_total = sum(part.weight * part.value for part in parts) - low_sample_penalty_val
-    clamped_total = max(0.0, min(1.0, raw_total))
-    components = []
-    for part in parts:
-        components.append(
+        raw_total = sum(part.weight * part.value for part in parts) - low_sample_penalty_val
+        clamped_total = max(0.0, min(1.0, raw_total))
+        components = [
             RecommendationScoreComponent(
                 key=part.key,
                 label=part.label,
@@ -343,6 +356,88 @@ def compose_pick_score(
                 weight=round(part.weight, 4),
                 contribution=round(part.weight * part.value, 4),
                 note=part.note,
+            )
+            for part in parts
+        ]
+        if low_sample_penalty_val > 0:
+            components.append(
+                RecommendationScoreComponent(
+                    key="penalty",
+                    label="Penalty",
+                    value=round(-low_sample_penalty_val, 4),
+                    weight=1.0,
+                    contribution=round(-low_sample_penalty_val, 4),
+                    note="Tier low-sample penalty",
+                )
+            )
+        return ScoreComposition(
+            total=clamped_total,
+            base_score=sum(part.weight * part.value for part in parts),
+            evidence_multiplier=1.0,
+            penalty=low_sample_penalty_val,
+            components=components,
+        )
+
+    counter_band = pick_counter_band(counter_score)
+    hierarchy_total = pick_hierarchy_score(
+        counter_band=counter_band,
+        worst_enemy_score=worst_enemy_score,
+        board_counter_score=counter_score,
+        tier_secondary_score=tier_secondary_score,
+        synergy_secondary_score=synergy_score,
+        confidence=0.0,
+    )
+    components = [
+        RecommendationScoreComponent(
+            key="counter_band",
+            label="Counter band",
+            value=round(float(counter_band), 4),
+            weight=1.0,
+            contribution=round(counter_band / max(pick_counter_band(1.0), 1), 4),
+            note=f"Primary ranking band over visible enemy delta2 profile (window {PICK_COUNTER_BAND_WINDOW:.2f})",
+        ),
+        RecommendationScoreComponent(
+            key="worst_enemy",
+            label="Worst visible matchup",
+            value=round(worst_enemy_score, 4),
+            weight=round(PICK_HIERARCHY_WORST_ENEMY_WEIGHT, 4),
+            contribution=round(PICK_HIERARCHY_WORST_ENEMY_WEIGHT * relation_to_unit_interval(worst_enemy_score), 4),
+            note="Secondary key so one hard-losing enemy cannot hide inside a good overall board average",
+        ),
+        RecommendationScoreComponent(
+            key="counter",
+            label="Board counter profile",
+            value=round(counter_score, 4),
+            weight=round(PICK_HIERARCHY_BOARD_COUNTER_WEIGHT, 4),
+            contribution=round(PICK_HIERARCHY_BOARD_COUNTER_WEIGHT * relation_to_unit_interval(counter_score), 4),
+            note="Average signed Delta2 expectation over all visible enemies after coverage penalties",
+        ),
+        RecommendationScoreComponent(
+            key="tier_secondary",
+            label="Tier secondary",
+            value=round(tier_secondary_score, 4),
+            weight=round(PICK_HIERARCHY_TIER_WEIGHT, 4),
+            contribution=round(PICK_HIERARCHY_TIER_WEIGHT * tier_secondary_score, 4),
+            note="Second-priority tiebreak once the counter profile is close enough",
+        ),
+        RecommendationScoreComponent(
+            key="synergy",
+            label="Synergy bonus",
+            value=round(synergy_score, 4),
+            weight=round(PICK_HIERARCHY_SYNERGY_WEIGHT, 4),
+            contribution=round(PICK_HIERARCHY_SYNERGY_WEIGHT * relation_to_unit_interval(synergy_score), 4),
+            note="Lightest tiebreak using normalized synergy delta",
+        ),
+    ]
+    if counter_coverage_penalty > 0:
+        components.append(
+            RecommendationScoreComponent(
+                key="counter_coverage_penalty",
+                label="Counter coverage penalty",
+                value=round(-counter_coverage_penalty, 4),
+                weight=1.0,
+                contribution=round(-counter_coverage_penalty, 4),
+                note="Visible enemy-role matchups without exact data were treated as a penalty instead of neutral",
             )
         )
     if low_sample_penalty_val > 0:
@@ -357,8 +452,8 @@ def compose_pick_score(
             )
         )
     return ScoreComposition(
-        total=clamped_total,
-        base_score=sum(part.weight * part.value for part in parts),
+        total=max(0.0, min(1.0, hierarchy_total - low_sample_penalty_val)),
+        base_score=hierarchy_total,
         evidence_multiplier=1.0,
         penalty=low_sample_penalty_val,
         components=components,
@@ -457,6 +552,37 @@ def compose_ban_score(
     ]
     base = sum(part.weight * part.value for part in parts)
     return ScoreComposition(total=max(0.0, min(1.0, base)), base_score=base, evidence_multiplier=1.0, penalty=0.0, components=components)
+
+
+def relation_to_unit_interval(value: float) -> float:
+    return (clamp_relation_score(value) + 1.0) / 2.0
+
+
+def pick_counter_band(counter_score: float) -> int:
+    max_band = int(2.0 / PICK_COUNTER_BAND_WINDOW)
+    clamped = clamp_relation_score(counter_score)
+    band = int((clamped + 1.0) / PICK_COUNTER_BAND_WINDOW)
+    return max(0, min(max_band, band))
+
+
+def pick_hierarchy_score(
+    *,
+    counter_band: int,
+    worst_enemy_score: float,
+    board_counter_score: float,
+    tier_secondary_score: float,
+    synergy_secondary_score: float,
+    confidence: float,
+) -> float:
+    max_band = max(pick_counter_band(1.0), 1)
+    within_band = (
+        relation_to_unit_interval(worst_enemy_score) * PICK_HIERARCHY_WORST_ENEMY_WEIGHT
+        + relation_to_unit_interval(board_counter_score) * PICK_HIERARCHY_BOARD_COUNTER_WEIGHT
+        + tier_secondary_score * PICK_HIERARCHY_TIER_WEIGHT
+        + relation_to_unit_interval(synergy_secondary_score) * PICK_HIERARCHY_SYNERGY_WEIGHT
+        + confidence * PICK_HIERARCHY_CONFIDENCE_WEIGHT
+    )
+    return max(0.0, min(1.0, (counter_band + within_band) / (max_band + 1)))
 
 
 def unique_notes(notes: list[str]) -> list[str]:

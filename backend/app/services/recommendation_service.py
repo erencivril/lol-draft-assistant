@@ -36,6 +36,8 @@ from .scoring import (
     low_sample_penalty,
     normalize_delta,
     normalize_synergy,
+    pick_counter_band,
+    pick_hierarchy_score,
     role_fit_score,
     RelationInsight,
     summarize_relations,
@@ -56,6 +58,7 @@ from .scoring_constants import (
     PICK_CONFIDENCE_GAMES_DIVISOR,
     PICK_CONFIDENCE_GAMES_MAX,
     PICK_CONFIDENCE_SAMPLE_WEIGHT,
+    PICK_COUNTER_MISSING_COVERAGE_PENALTY,
     PICK_DIRECT_THREAT_GUARDRAIL_CAP,
     PICK_DIRECT_THREAT_GUARDRAIL_FLOOR,
     PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
@@ -78,6 +81,35 @@ class IndexSnapshot:
     tier_scope_index: dict[tuple[str, str, str], list[TierStatRecord]]
     matchup_index: dict[tuple[str, str, str, str, int, int], MatchupRecord]
     synergy_index: dict[tuple[str, str, str, str, int, int], SynergyRecord]
+
+
+@dataclass(slots=True)
+class PickRecommendationDraft:
+    item: RecommendationItem
+    has_visible_enemies: bool
+    counter_band: int
+    worst_enemy_score: float
+    board_counter_score: float
+    tier_secondary_score: float
+    synergy_secondary_score: float
+    confidence: float
+
+    def sort_key(self) -> tuple[float, ...]:
+        if self.has_visible_enemies:
+            return (
+                float(self.counter_band),
+                self.worst_enemy_score,
+                self.board_counter_score,
+                self.tier_secondary_score,
+                self.synergy_secondary_score,
+                self.confidence,
+            )
+        return (
+            self.item.total_score,
+            self.tier_secondary_score,
+            self.synergy_secondary_score,
+            self.confidence,
+        )
 
 
 class RecommendationService:
@@ -502,7 +534,7 @@ class RecommendationService:
             roles={local_role},
             excluded=excluded,
         )
-        picks = [
+        pick_drafts = [
             self._build_pick_recommendation(
                 candidate=candidate,
                 enemy_context=enemy_context,
@@ -514,7 +546,8 @@ class RecommendationService:
             )
             for candidate in pick_candidates.values()
         ]
-        picks.sort(key=lambda item: item.total_score, reverse=True)
+        pick_drafts.sort(key=lambda draft: draft.sort_key(), reverse=True)
+        picks = self._finalize_pick_recommendations(pick_drafts)
 
         ban_candidates = self._collect_tier_candidates(
             region=region,
@@ -679,7 +712,7 @@ class RecommendationService:
         settings: UserSettings,
         patch_trusted: bool,
         scope_complete: bool,
-    ) -> RecommendationItem:
+    ) -> PickRecommendationDraft:
         enemy_slots = [slot for slot in enemy_context.slots if slot.champion_id]
         ally_slots = [slot for slot in ally_context.slots if slot.champion_id]
         counter_summary = summarize_relations(
@@ -702,6 +735,7 @@ class RecommendationService:
                 champion_name=self._champion_name(slot.champion_id),
             ),
             candidate_role=candidate.role,
+            missing_penalty_scale=PICK_COUNTER_MISSING_COVERAGE_PENALTY,
         )
         synergy_summary = summarize_relations(
             slots=ally_slots,
@@ -726,27 +760,26 @@ class RecommendationService:
         )
         ts = tier_score(candidate.record)
         rfs = role_fit_score(candidate.record)
-        # draft_progress: 0.0 (no picks visible) → 1.0 (all 9 possible picks visible)
-        draft_progress = min((len(enemy_slots) + len(ally_slots)) / 9.0, 1.0)
+        tier_secondary = compose_predraft_pick_score(candidate.record).total
+        low_sample_penalty_val = low_sample_penalty(candidate.record)
         if not enemy_slots and not ally_slots:
             composition = compose_predraft_pick_score(candidate.record)
         else:
             composition = compose_pick_score(
                 record=candidate.record,
                 counter_score=counter_summary.score,
+                worst_enemy_score=counter_summary.worst_score,
+                counter_coverage_penalty=counter_summary.coverage_penalty,
+                tier_secondary_score=tier_secondary,
                 synergy_score=synergy_summary.score,
                 enemy_count=len(enemy_slots),
                 ally_count=len(ally_slots),
-                low_sample_penalty_val=low_sample_penalty(candidate.record),
-                draft_progress=draft_progress,
+                low_sample_penalty_val=low_sample_penalty_val,
             )
         thin = has_thin_evidence(counter_summary, synergy_summary)
-        total = max(0.0, composition.total * (THIN_EVIDENCE_MULTIPLIER if thin else 1.0))
         threat_penalty, blocked_by = self._pick_threat_guardrail(counter_summary=counter_summary)
         threat_penalty_note: str | None = None
         if threat_penalty > 0 and blocked_by is not None:
-            total = max(0.0, total - threat_penalty)
-            composition.total = max(0.0, composition.total - threat_penalty)
             blocked_role = blocked_by.role or "unknown"
             composition.components.append(
                 RecommendationScoreComponent(
@@ -778,11 +811,32 @@ class RecommendationService:
             confidence = min(confidence, CONFIDENCE_CAP_PATCH_MISMATCH)
         if not scope_complete:
             confidence = min(confidence, CONFIDENCE_CAP_INCOMPLETE_SCOPE)
+        if enemy_slots:
+            hierarchy_total = pick_hierarchy_score(
+                counter_band=pick_counter_band(counter_summary.score),
+                worst_enemy_score=counter_summary.worst_score,
+                board_counter_score=counter_summary.score,
+                tier_secondary_score=tier_secondary,
+                synergy_secondary_score=synergy_summary.score,
+                confidence=confidence,
+            )
+            total = max(
+                0.0,
+                max(0.0, hierarchy_total - low_sample_penalty_val) * (THIN_EVIDENCE_MULTIPLIER if thin else 1.0)
+                - threat_penalty,
+            )
+            composition.total = total
+        else:
+            total = max(0.0, composition.total * (THIN_EVIDENCE_MULTIPLIER if thin else 1.0))
         reasons = [
             f"Tier #{candidate.record.tier_rank or '?'} / {candidate.record.tier_grade} / WR {candidate.record.win_rate:.1f}% / {candidate.record.games:,} games",
             f"Counter coverage {counter_summary.coverage:.0%}",
             f"Synergy coverage {synergy_summary.coverage:.0%}",
         ]
+        if counter_summary.coverage_penalty > 0:
+            reasons.append(
+                f"Counter coverage penalty {counter_summary.coverage_penalty:.2f} applied because some visible enemy-role matchups had no exact data."
+            )
         if threat_penalty_note:
             reasons.append(threat_penalty_note)
         reasons.extend(insight.summary for insight in counter_summary.insights[:2])
@@ -794,7 +848,7 @@ class RecommendationService:
         )
         if threat_penalty_note:
             explanation.penalties.insert(0, threat_penalty_note)
-        return RecommendationItem(
+        item = RecommendationItem(
             champion_id=candidate.champion_id, champion_name=champion_name_val,
             suggested_role=candidate.role, total_score=round(total * 100, 2), display_band=display_band(total * 100),
             counter_score=round(counter_summary.score, 4), synergy_score=round(synergy_summary.score, 4),
@@ -804,18 +858,49 @@ class RecommendationService:
             sample_confidence=round(sc, 4), thin_evidence=thin, confidence=round(confidence, 4),
             reasons=reasons, explanation=explanation,
         )
+        return PickRecommendationDraft(
+            item=item,
+            has_visible_enemies=bool(enemy_slots),
+            counter_band=pick_counter_band(counter_summary.score) if enemy_slots else 0,
+            worst_enemy_score=counter_summary.worst_score,
+            board_counter_score=counter_summary.score,
+            tier_secondary_score=tier_secondary,
+            synergy_secondary_score=synergy_summary.score,
+            confidence=confidence,
+        )
+
+    def _finalize_pick_recommendations(
+        self,
+        drafts: list[PickRecommendationDraft],
+    ) -> list[RecommendationItem]:
+        finalized: list[RecommendationItem] = []
+        previous_score: float | None = None
+        for draft in drafts:
+            score = draft.item.total_score
+            if previous_score is not None and score >= previous_score:
+                score = max(0.0, previous_score - 0.01)
+            finalized.append(
+                draft.item.model_copy(
+                    update={
+                        "total_score": round(score, 2),
+                        "display_band": display_band(score),
+                    }
+                )
+            )
+            previous_score = score
+        return finalized
 
     def _pick_threat_guardrail(
         self, *, counter_summary
     ) -> tuple[float, RelationInsight | None]:
         blocked_by = min(
-            (insight for insight in counter_summary.insights if insight.net_contribution < 0.0),
-            key=lambda insight: insight.net_contribution,
+            (insight for insight in counter_summary.insights if insight.signed_edge < 0.0),
+            key=lambda insight: insight.signed_edge,
             default=None,
         )
         if blocked_by is None:
             return 0.0, None
-        severity = abs(blocked_by.net_contribution)
+        severity = abs(counter_summary.worst_score)
         penalty = min(
             PICK_DIRECT_THREAT_GUARDRAIL_CAP,
             max(0.0, severity - PICK_DIRECT_THREAT_GUARDRAIL_FLOOR) * PICK_DIRECT_THREAT_GUARDRAIL_SCALE,

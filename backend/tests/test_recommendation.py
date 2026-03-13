@@ -1873,3 +1873,584 @@ async def test_recommendation_returns_warming_bundle_while_indexes_build(reposit
     assert any("warming up" in warning.lower() for warning in bundle.warnings)
     assert snapshot.draft_state.my_team_picks[1].champion_name == "Xin Zhao"
     assert snapshot.draft_state.my_team_picks[1].champion_image_url == "xin.png"
+
+
+@pytest.mark.asyncio
+async def test_recommendation_uses_tier_as_tiebreak_for_equal_counter_profiles(repository: DatabaseRepository) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="Garen", name="Garen", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=10, key="CounterA", name="Counter A", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=11, key="CounterB", name="Counter B", image_url="", roles=["top"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald",
+        role="top",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=10,
+                region="TR",
+                rank_tier="emerald",
+                role="top",
+                tier_rank=10,
+                win_rate=50.9,
+                pick_rate=5.5,
+                ban_rate=1.5,
+                tier_grade="A",
+                pbi=10.0,
+                games=18000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=11,
+                region="TR",
+                rank_tier="emerald",
+                role="top",
+                tier_rank=2,
+                win_rate=52.4,
+                pick_rate=8.1,
+                ban_rate=3.2,
+                tier_grade="S",
+                pbi=18.0,
+                games=22000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_matchups(
+        region="TR",
+        rank_tier="emerald",
+        role="top",
+        patch=patch,
+        records=[
+            MatchupRecord(
+                champion_id=10,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="top",
+                opponent_role="top",
+                win_rate=53.0,
+                delta1=1.0,
+                delta2=8.0,
+                games=2600,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="top",
+                opponent_role="top",
+                win_rate=53.0,
+                delta1=1.0,
+                delta2=8.0,
+                games=2600,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="top",
+            my_team_picks=[TeamSlot(cell_id=1, champion_id=0, assigned_role="top", is_local_player=True)],
+            enemy_team_picks=[TeamSlot(cell_id=6, champion_id=1, assigned_role="top")],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald", role="top"),
+        settings=UserSettings(top_n=2),
+    )
+
+    assert bundle.picks[0].champion_id == 11
+    assert bundle.picks[0].counter_score == pytest.approx(bundle.picks[1].counter_score, abs=1e-4)
+    assert bundle.picks[0].tier_score > bundle.picks[1].tier_score
+
+
+@pytest.mark.asyncio
+async def test_recommendation_uses_synergy_after_counter_and_tier_tie(repository: DatabaseRepository) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="Garen", name="Garen", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=2, key="Thresh", name="Thresh", image_url="", roles=["support"], patch=patch),
+            ChampionRecord(champion_id=10, key="FlexA", name="Flex A", image_url="", roles=["middle"], patch=patch),
+            ChampionRecord(champion_id=11, key="FlexB", name="Flex B", image_url="", roles=["middle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald",
+        role="middle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=10,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                tier_rank=6,
+                win_rate=51.8,
+                pick_rate=6.2,
+                ban_rate=2.1,
+                tier_grade="A+",
+                pbi=14.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=11,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                tier_rank=6,
+                win_rate=51.8,
+                pick_rate=6.2,
+                ban_rate=2.1,
+                tier_grade="A+",
+                pbi=14.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_matchups(
+        region="TR",
+        rank_tier="emerald",
+        role="middle",
+        patch=patch,
+        records=[
+            MatchupRecord(
+                champion_id=10,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="top",
+                win_rate=53.0,
+                delta1=1.0,
+                delta2=8.0,
+                games=2600,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="top",
+                win_rate=53.0,
+                delta1=1.0,
+                delta2=8.0,
+                games=2600,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_synergies(
+        region="TR",
+        rank_tier="emerald",
+        role="middle",
+        patch=patch,
+        records=[
+            SynergyRecord(
+                champion_id=10,
+                teammate_id=2,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                teammate_role="support",
+                duo_win_rate=55.5,
+                synergy_delta=2.2,
+                normalised_delta=9.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            SynergyRecord(
+                champion_id=11,
+                teammate_id=2,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                teammate_role="support",
+                duo_win_rate=50.0,
+                synergy_delta=0.0,
+                normalised_delta=0.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="middle",
+            my_team_picks=[
+                TeamSlot(cell_id=1, champion_id=0, assigned_role="middle", is_local_player=True),
+                TeamSlot(cell_id=2, champion_id=2, assigned_role="support"),
+            ],
+            enemy_team_picks=[TeamSlot(cell_id=6, champion_id=1, assigned_role="top")],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald", role="middle"),
+        settings=UserSettings(top_n=2),
+    )
+
+    assert bundle.picks[0].champion_id == 10
+    assert bundle.picks[0].counter_score == pytest.approx(bundle.picks[1].counter_score, abs=1e-4)
+    assert bundle.picks[0].tier_score == pytest.approx(bundle.picks[1].tier_score, abs=1e-4)
+    assert bundle.picks[0].synergy_score > bundle.picks[1].synergy_score
+
+
+@pytest.mark.asyncio
+async def test_recommendation_penalizes_missing_visible_counter_coverage(repository: DatabaseRepository) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="Talon", name="Talon", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=2, key="Renekton", name="Renekton", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=10, key="CoverageA", name="Coverage A", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=11, key="CoverageB", name="Coverage B", image_url="", roles=["jungle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald_plus",
+        role="jungle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=10,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                tier_rank=6,
+                win_rate=52.0,
+                pick_rate=7.0,
+                ban_rate=3.0,
+                tier_grade="A",
+                pbi=13.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=11,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                tier_rank=7,
+                win_rate=51.9,
+                pick_rate=7.0,
+                ban_rate=3.0,
+                tier_grade="A",
+                pbi=13.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_matchups(
+        region="TR",
+        rank_tier="emerald_plus",
+        role="jungle",
+        patch=patch,
+        records=[
+            MatchupRecord(
+                champion_id=10,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="jungle",
+                win_rate=56.0,
+                delta1=2.0,
+                delta2=15.0,
+                games=2500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="jungle",
+                win_rate=53.5,
+                delta1=1.0,
+                delta2=8.0,
+                games=2500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=2,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="top",
+                win_rate=53.5,
+                delta1=1.0,
+                delta2=8.0,
+                games=2500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="jungle",
+            my_team_picks=[TeamSlot(cell_id=1, champion_id=0, assigned_role="jungle", is_local_player=True)],
+            enemy_team_picks=[
+                TeamSlot(cell_id=6, champion_id=1, assigned_role="jungle"),
+                TeamSlot(cell_id=7, champion_id=2, assigned_role="top"),
+            ],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald_plus", role="jungle"),
+        settings=UserSettings(top_n=2),
+    )
+
+    assert bundle.picks[0].champion_id == 11
+    assert bundle.picks[0].counter_score > bundle.picks[1].counter_score
+    assert any("Counter coverage penalty" in penalty for penalty in bundle.picks[1].explanation.penalties)
+
+
+@pytest.mark.asyncio
+async def test_recommendation_uses_inferred_enemy_role_probabilities_in_counter_profile(repository: DatabaseRepository) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="Sejuani", name="Sejuani", image_url="", roles=["top", "jungle"], patch=patch),
+            ChampionRecord(champion_id=10, key="TopAnswer", name="Top Answer", image_url="", roles=["middle"], patch=patch),
+            ChampionRecord(champion_id=11, key="JungleAnswer", name="Jungle Answer", image_url="", roles=["middle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald",
+        role="middle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=10,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                tier_rank=5,
+                win_rate=52.0,
+                pick_rate=7.0,
+                ban_rate=3.0,
+                tier_grade="A+",
+                pbi=15.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=11,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                tier_rank=5,
+                win_rate=52.0,
+                pick_rate=7.0,
+                ban_rate=3.0,
+                tier_grade="A+",
+                pbi=15.0,
+                games=20000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="top",
+                tier_rank=3,
+                win_rate=51.5,
+                pick_rate=11.0,
+                ban_rate=4.0,
+                tier_grade="A",
+                pbi=14.0,
+                games=18000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="jungle",
+                tier_rank=20,
+                win_rate=49.8,
+                pick_rate=2.0,
+                ban_rate=1.0,
+                tier_grade="B",
+                pbi=4.0,
+                games=2500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_matchups(
+        region="TR",
+        rank_tier="emerald",
+        role="middle",
+        patch=patch,
+        records=[
+            MatchupRecord(
+                champion_id=10,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="top",
+                win_rate=55.0,
+                delta1=1.5,
+                delta2=10.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=10,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="jungle",
+                win_rate=50.0,
+                delta1=0.0,
+                delta2=0.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="top",
+                win_rate=50.0,
+                delta1=0.0,
+                delta2=0.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=11,
+                opponent_id=1,
+                region="TR",
+                rank_tier="emerald",
+                role="middle",
+                opponent_role="jungle",
+                win_rate=55.0,
+                delta1=1.5,
+                delta2=10.0,
+                games=1800,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="middle",
+            my_team_picks=[TeamSlot(cell_id=1, champion_id=0, assigned_role="middle", is_local_player=True)],
+            enemy_team_picks=[TeamSlot(cell_id=6, champion_id=1, assigned_role=None)],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald", role="middle"),
+        settings=UserSettings(top_n=2),
+    )
+
+    assert bundle.picks[0].champion_id == 10
+    assert bundle.picks[0].counter_score > bundle.picks[1].counter_score
+    assert bundle.picks[0].explanation.counters[0].role == "top"

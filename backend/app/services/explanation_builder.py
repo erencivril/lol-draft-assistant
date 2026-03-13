@@ -110,6 +110,10 @@ def explanation_penalties(
             f"Score was reduced by draft coverage to {composition.evidence_multiplier:.2f}x because "
             f"exact matchup coverage is {counter_summary.coverage:.0%} and exact synergy coverage is {synergy_summary.coverage:.0%}."
         )
+    if counter_summary.coverage_penalty > 0:
+        penalties.append(
+            f"Counter coverage penalty applied because exact matchup data only covered {counter_summary.coverage:.0%} of visible enemy roles."
+        )
     penalties.extend(counter_summary.thin_evidence_notes[:3])
     penalties.extend(note for note in synergy_summary.thin_evidence_notes[:3] if note not in penalties)
     if thin_evidence:
