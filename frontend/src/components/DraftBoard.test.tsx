@@ -196,6 +196,47 @@ describe("DraftBoard", () => {
     expect(within(roleSelect).getByRole("option", { name: "Unknown" })).toBeInTheDocument();
   });
 
+  it("shows inferred enemy roles and confidence directly on the board", () => {
+    const inferredRoleDraftState: DraftState = {
+      ...draftState,
+      enemy_team_picks: [
+        {
+          ...draftState.enemy_team_picks[0],
+          assigned_role: "support",
+          effective_role: "support",
+          role_source: "inferred",
+          role_confidence: 0.79,
+          role_candidates: [{ role: "support", confidence: 0.79 }],
+        },
+      ],
+    };
+
+    render(
+      <DraftBoard
+        champions={champions}
+        draftState={inferredRoleDraftState}
+        lcuConnected
+        targetCellId={3}
+        localPlayerCellId={3}
+        onSlotChampionChange={vi.fn()}
+        onSlotRoleChange={vi.fn()}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
+        onBanChange={vi.fn()}
+      />
+    );
+
+    const enemyCard = screen.getByText("Enemy 1").closest("article");
+
+    expect(screen.getByLabelText("Enemy 1 role")).toHaveValue("support");
+    expect(screen.getByText("INFERRED 79%")).toBeInTheDocument();
+    const supportSummary = within(enemyCard as HTMLElement)
+      .getAllByText("Support")
+      .find((node) => node.tagName === "SPAN");
+
+    expect(supportSummary).toBeDefined();
+  });
+
   it("opens the champion picker and emits selection changes", async () => {
     const user = userEvent.setup();
     const onSlotChampionChange = vi.fn();

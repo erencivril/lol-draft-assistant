@@ -177,4 +177,121 @@ describe("inferDraftRoles", () => {
     expect(resolved.enemy_team_picks[0].effective_role).toBe("jungle");
     expect(resolved.enemy_team_picks[0].role_source).toBe("lcu");
   });
+
+  it("keeps only the newest duplicate manual enemy lock and re-inferrs the old owner", () => {
+    const draftState: DraftState = {
+      ...baseDraftState,
+      enemy_team_picks: [
+        createSlot(6, 2, {
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        }),
+        createSlot(7, 1, {
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        }),
+        createSlot(8, 3),
+        createSlot(9, 4),
+        createSlot(10, 5),
+      ],
+    };
+
+    const resolved = inferDraftRoles(draftState, championLookup, {
+      enemyManualLockOrderByCellId: {
+        6: 1,
+        7: 2,
+      },
+    });
+
+    expect(resolved.enemy_team_picks[0].effective_role).toBe("jungle");
+    expect(resolved.enemy_team_picks[0].role_source).toBe("inferred");
+    expect(resolved.enemy_team_picks[1].effective_role).toBe("top");
+    expect(resolved.enemy_team_picks[1].role_source).toBe("manual");
+  });
+
+  it("keeps multiple open enemy slots unknown until a lane is forced", () => {
+    const draftState: DraftState = {
+      ...baseDraftState,
+      enemy_team_picks: [
+        createSlot(6, 1, {
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        }),
+        createSlot(7, 3, {
+          assigned_role: "middle",
+          effective_role: "middle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "middle", confidence: 1 }],
+        }),
+        createSlot(8, 0),
+        createSlot(9, 0),
+        createSlot(10, 5, {
+          assigned_role: "support",
+          effective_role: "support",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "support", confidence: 1 }],
+        }),
+      ],
+    };
+
+    const resolved = inferDraftRoles(draftState, championLookup);
+
+    expect(resolved.enemy_team_picks[2].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[2].role_source).toBe("unknown");
+    expect(resolved.enemy_team_picks[3].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[3].role_source).toBe("unknown");
+  });
+
+  it("assigns the last remaining lane to a single open enemy slot", () => {
+    const draftState: DraftState = {
+      ...baseDraftState,
+      enemy_team_picks: [
+        createSlot(6, 1, {
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        }),
+        createSlot(7, 2, {
+          assigned_role: "jungle",
+          effective_role: "jungle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "jungle", confidence: 1 }],
+        }),
+        createSlot(8, 3, {
+          assigned_role: "middle",
+          effective_role: "middle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "middle", confidence: 1 }],
+        }),
+        createSlot(9, 4, {
+          assigned_role: "bottom",
+          effective_role: "bottom",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "bottom", confidence: 1 }],
+        }),
+        createSlot(10, 0),
+      ],
+    };
+
+    const resolved = inferDraftRoles(draftState, championLookup);
+
+    expect(resolved.enemy_team_picks[4].effective_role).toBe("support");
+    expect(resolved.enemy_team_picks[4].role_source).toBe("inferred");
+  });
 });

@@ -50,6 +50,15 @@ function roleLabel(role?: string | null) {
   return role ? role.charAt(0).toUpperCase() + role.slice(1) : "Unknown";
 }
 
+function roleSourceLabel(slot: TeamSlot) {
+  if (slot.role_source === "inferred") {
+    const confidence = Math.round(slot.role_confidence * 100);
+    return confidence > 0 ? `INFERRED ${confidence}%` : "INFERRED";
+  }
+
+  return slot.role_source === "manual" ? "MANUAL" : slot.role_source.toUpperCase();
+}
+
 function SlotCard({
   slot,
   title,
@@ -178,7 +187,7 @@ function SlotCard({
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
         <span>{roleLabel(slot.effective_role ?? slot.assigned_role)}</span>
         <div className="flex items-center gap-3">
-          <span>{slot.role_source === "manual" ? "Manual" : slot.role_source.toUpperCase()}</span>
+          <span>{roleSourceLabel(slot)}</span>
           {onSelectTarget ? (
             <button
               type="button"

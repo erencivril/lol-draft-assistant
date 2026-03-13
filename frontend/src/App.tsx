@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   fetchChampions,
@@ -31,6 +31,7 @@ type LcuDraftUpdatePayload = {
 
 type SlotOverride = {
   championId?: number;
+  clearRole?: boolean;
   role?: string | null;
 };
 
@@ -82,17 +83,19 @@ function loadStoredFilters(): AnalysisFilters {
   }
 }
 
-function createBaseSlot(cellId: number, role: string, isLocalPlayer = false): TeamSlot {
+function createBaseSlot(cellId: number, role: string | null, isLocalPlayer = false): TeamSlot {
+  const normalizedRole = role && roleOrder.includes(role) ? role : null;
+
   return {
     cell_id: cellId,
     champion_id: 0,
     champion_name: null,
     champion_image_url: null,
-    assigned_role: role,
-    effective_role: role,
-    role_source: "manual",
-    role_confidence: 1,
-    role_candidates: [{ role, confidence: 1 }],
+    assigned_role: normalizedRole,
+    effective_role: normalizedRole,
+    role_source: normalizedRole ? "manual" : "unknown",
+    role_confidence: normalizedRole ? 1 : 0,
+    role_candidates: normalizedRole ? [{ role: normalizedRole, confidence: 1 }] : [],
     is_local_player: isLocalPlayer,
   };
 }
@@ -109,7 +112,7 @@ function createManualDraftState(localRole: string): DraftState {
     current_actor_cell_id: localPlayerCellId,
     current_action_type: "pick",
     my_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 1, role, role === safeRole)),
-    enemy_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 6, role)),
+    enemy_team_picks: roleOrder.map((_, index) => createBaseSlot(index + 6, null)),
     my_team_declared_roles: [safeRole],
     enemy_team_declared_roles: [],
     my_bans: [0, 0, 0, 0, 0],
@@ -118,6 +121,68 @@ function createManualDraftState(localRole: string): DraftState {
     patch: null,
     queue_type: null,
     is_local_players_turn: true,
+  };
+}
+
+function createRoleSnapshot(role: string | null): Pick<TeamSlot, "assigned_role" | "effective_role" | "role_source" | "role_confidence" | "role_candidates"> {
+  if (!role) {
+    return {
+      assigned_role: null,
+      effective_role: null,
+      role_source: "unknown",
+      role_confidence: 0,
+      role_candidates: [],
+    };
+  }
+
+  return {
+    assigned_role: role,
+    effective_role: role,
+    role_source: "manual",
+    role_confidence: 1,
+    role_candidates: [{ role, confidence: 1 }],
+  };
+}
+
+function formatRoleName(role: string): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function enemySlotLabel(cellId: number): string {
+  return `Enemy ${Math.max(1, cellId - 5)}`;
+}
+
+function findEnemyRoleOwner(draftState: DraftState, cellId: number, role: string | null): TeamSlot | undefined {
+  if (!role) {
+    return undefined;
+  }
+
+  return draftState.enemy_team_picks.find(
+    (slot) => slot.cell_id !== cellId && (slot.effective_role ?? slot.assigned_role ?? null) === role
+  );
+}
+
+export function resolveEnemyRoleSelection(
+  draftState: DraftState,
+  cellId: number,
+  role: string
+): {
+  releasedCellId: number | null;
+  toastText: string | null;
+} {
+  const nextRole = role || null;
+  const previousOwner = findEnemyRoleOwner(draftState, cellId, nextRole);
+
+  if (!previousOwner || !nextRole) {
+    return {
+      releasedCellId: null,
+      toastText: null,
+    };
+  }
+
+  return {
+    releasedCellId: previousOwner.cell_id,
+    toastText: `${enemySlotLabel(cellId)} took ${formatRoleName(nextRole)}. ${enemySlotLabel(previousOwner.cell_id)} was re-inferred.`,
   };
 }
 
@@ -221,7 +286,11 @@ function applyDraftOverrides(
       return slot;
     }
     const nextRole =
-      override.role === undefined ? slot.effective_role ?? slot.assigned_role ?? null : override.role;
+      override.role === undefined
+        ? override.clearRole
+          ? null
+          : slot.effective_role ?? slot.assigned_role ?? null
+        : override.role;
     return {
       ...slot,
       champion_id: override.championId ?? slot.champion_id,
@@ -313,6 +382,7 @@ function localOverrideApplied(
 
 export default function App() {
   const initialFilters = loadStoredFilters();
+  const enemyRoleLockOrderRef = useRef(0);
   const [filters, setFilters] = useState<AnalysisFilters>(initialFilters);
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [champions, setChampions] = useState<ChampionCatalogItem[]>([]);
@@ -320,6 +390,7 @@ export default function App() {
   const [lcuDraftState, setLcuDraftState] = useState<DraftState | null>(null);
   const [targetCellId, setTargetCellId] = useState<number | null>(null);
   const [localRoleOverride, setLocalRoleOverride] = useState<string | null>(null);
+  const [enemyRoleLockOrder, setEnemyRoleLockOrder] = useState<Record<number, number>>({});
   const [slotOverrides, setSlotOverrides] = useState<Record<string, SlotOverride>>({});
   const [banOverrides, setBanOverrides] = useState<Record<string, number>>({});
   const [recommendations, setRecommendations] = useState<RecommendationBundle>(emptyRecommendations);
@@ -448,9 +519,20 @@ export default function App() {
         ? applyDraftOverrides(lcuDraftState, slotOverrides, banOverrides)
         : manualDraftState;
     const draftWithLocalRole = applyLocalRoleOverride(baseDraft, localRoleOverride);
-    const inferredDraft = inferDraftRoles(draftWithLocalRole, championLookup);
+    const inferredDraft = inferDraftRoles(draftWithLocalRole, championLookup, {
+      enemyManualLockOrderByCellId: enemyRoleLockOrder,
+    });
     return hydrateDraftState(inferredDraft, championLookup);
-  }, [banOverrides, championLookup, lcuDraftState, lcuState.connected, localRoleOverride, manualDraftState, slotOverrides]);
+  }, [
+    banOverrides,
+    championLookup,
+    enemyRoleLockOrder,
+    lcuDraftState,
+    lcuState.connected,
+    localRoleOverride,
+    manualDraftState,
+    slotOverrides,
+  ]);
 
   const recommendTargetCellId = useMemo(
     () => resolveRecommendTargetCellId(effectiveDraftState, targetCellId),
@@ -533,6 +615,30 @@ export default function App() {
       return;
     }
 
+    const enemyRoleResolution =
+      team === "enemy" ? resolveEnemyRoleSelection(effectiveDraftState, cellId, role) : null;
+    const nextEnemyRoleLockOrder = role
+      ? (() => {
+          enemyRoleLockOrderRef.current += 1;
+          return enemyRoleLockOrderRef.current;
+        })()
+      : null;
+
+    if (team === "enemy") {
+      setEnemyRoleLockOrder((current) => {
+        const nextOrder = { ...current };
+        if (nextEnemyRoleLockOrder != null) {
+          nextOrder[cellId] = nextEnemyRoleLockOrder;
+        } else {
+          delete nextOrder[cellId];
+        }
+        if (enemyRoleResolution?.releasedCellId != null) {
+          delete nextOrder[enemyRoleResolution.releasedCellId];
+        }
+        return nextOrder;
+      });
+    }
+
     if (lcuState.connected) {
       const slotKey = `${team}:${cellId}`;
       setSlotOverrides((current) => {
@@ -540,15 +646,62 @@ export default function App() {
         const currentOverride = nextOverrides[slotKey] ?? {};
         const nextOverride = {
           ...currentOverride,
+          clearRole: false,
           role: role || null,
         };
-        if (nextOverride.championId === undefined && nextOverride.role == null) {
+        if (!nextOverride.clearRole && nextOverride.championId === undefined && nextOverride.role == null) {
           delete nextOverrides[slotKey];
         } else {
           nextOverrides[slotKey] = nextOverride;
         }
+
+        if (team === "enemy" && enemyRoleResolution?.releasedCellId != null) {
+          const releasedSlotKey = `enemy:${enemyRoleResolution.releasedCellId}`;
+          const releasedOverride = nextOverrides[releasedSlotKey] ?? {};
+          const nextReleasedOverride = {
+            ...releasedOverride,
+            clearRole: true,
+            role: null,
+          };
+          if (!nextReleasedOverride.clearRole && nextReleasedOverride.championId === undefined && nextReleasedOverride.role == null) {
+            delete nextOverrides[releasedSlotKey];
+          } else {
+            nextOverrides[releasedSlotKey] = nextReleasedOverride;
+          }
+        }
+
         return nextOverrides;
       });
+      if (enemyRoleResolution?.toastText) {
+        setToastMessage({ text: enemyRoleResolution.toastText, tone: "success" });
+      }
+      return;
+    }
+
+    if (team === "enemy") {
+      setManualDraftState((currentDraft) => ({
+        ...currentDraft,
+        enemy_team_picks: currentDraft.enemy_team_picks.map((slot) => {
+          if (slot.cell_id === cellId) {
+            return {
+              ...slot,
+              ...createRoleSnapshot(role || null),
+            };
+          }
+
+          if (enemyRoleResolution?.releasedCellId === slot.cell_id) {
+            return {
+              ...slot,
+              ...createRoleSnapshot(null),
+            };
+          }
+
+          return slot;
+        }),
+      }));
+      if (enemyRoleResolution?.toastText) {
+        setToastMessage({ text: enemyRoleResolution.toastText, tone: "success" });
+      }
       return;
     }
 
@@ -652,6 +805,8 @@ export default function App() {
               setSlotOverrides({});
               setBanOverrides({});
               setLocalRoleOverride(null);
+              setEnemyRoleLockOrder({});
+              enemyRoleLockOrderRef.current = 0;
               setToastMessage({ text: "Local overrides cleared.", tone: "success" });
             }}
           />
