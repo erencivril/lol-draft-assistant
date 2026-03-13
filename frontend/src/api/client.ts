@@ -19,9 +19,18 @@ export type RecommendSlotPayload = {
 export type RecommendPayload = {
   region: string;
   rank_tier: string;
+  role?: string;
   target_cell_id: number;
   enemy_slots: RecommendSlotPayload[];
   ally_slots: RecommendSlotPayload[];
+  enemy_picks?: Array<{
+    champion_id: number;
+    role?: string | null;
+  }>;
+  ally_picks?: Array<{
+    champion_id: number;
+    role?: string | null;
+  }>;
   bans: number[];
 };
 

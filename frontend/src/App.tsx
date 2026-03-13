@@ -263,9 +263,18 @@ export function buildRecommendPayload(
   draftState: DraftState,
   targetCellId: number
 ): RecommendPayload {
+  const targetSlot = findSlotByCellId(draftState.my_team_picks, targetCellId);
+  const targetRole =
+    targetSlot?.effective_role ??
+    targetSlot?.assigned_role ??
+    draftState.local_player_effective_role ??
+    draftState.local_player_assigned_role ??
+    "middle";
+
   return {
     region: filters.region,
     rank_tier: filters.rank_tier,
+    role: targetRole,
     target_cell_id: targetCellId,
     ally_slots: draftState.my_team_picks.map((slot) => ({
       cell_id: slot.cell_id,
@@ -278,6 +287,18 @@ export function buildRecommendPayload(
       champion_id: slot.champion_id,
       role: slot.effective_role ?? slot.assigned_role ?? null,
     })),
+    ally_picks: draftState.my_team_picks
+      .filter((slot) => slot.cell_id !== targetCellId && slot.champion_id > 0)
+      .map((slot) => ({
+        champion_id: slot.champion_id,
+        role: slot.effective_role ?? slot.assigned_role ?? null,
+      })),
+    enemy_picks: draftState.enemy_team_picks
+      .filter((slot) => slot.champion_id > 0)
+      .map((slot) => ({
+        champion_id: slot.champion_id,
+        role: slot.effective_role ?? slot.assigned_role ?? null,
+      })),
     bans: [...draftState.my_bans, ...draftState.enemy_bans].filter((championId) => championId > 0),
   };
 }
