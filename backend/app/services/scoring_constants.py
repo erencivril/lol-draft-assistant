@@ -29,16 +29,16 @@ RELATION_SHRINKAGE_PRIOR_GAMES: float = 100.0
 MATCHUP_SHRINKAGE_PRIOR: float = 200.0
 SYNERGY_SHRINKAGE_PRIOR: float = 150.0
 
-COUNTER_BUDGET_BASE: float = 0.07
-COUNTER_BUDGET_PER_ENEMY: float = 0.07
-COUNTER_BUDGET_CAP: float = 0.42
+COUNTER_BUDGET_BASE: float = 0.09
+COUNTER_BUDGET_PER_ENEMY: float = 0.09
+COUNTER_BUDGET_CAP: float = 0.55
 
-SYNERGY_BUDGET_BASE: float = 0.03
-SYNERGY_BUDGET_PER_ALLY: float = 0.03
-SYNERGY_BUDGET_CAP: float = 0.15
+SYNERGY_BUDGET_BASE: float = 0.02
+SYNERGY_BUDGET_PER_ALLY: float = 0.02
+SYNERGY_BUDGET_CAP: float = 0.12
 
-# Late-draft counter boost: as more champions are visible, counter budget scales up by this factor
-LATE_DRAFT_COUNTER_BOOST_MAX: float = 0.25
+# Late-draft counter boost: as more champions are visible, direct matchup info should dominate harder.
+LATE_DRAFT_COUNTER_BOOST_MAX: float = 0.35
 
 COUNTER_EDGE_SCALE: float = 7.0
 SYNERGY_EDGE_SCALE: float = 10.0
@@ -116,8 +116,8 @@ THIN_EVIDENCE_GAME_THRESHOLD: int = 100
 
 # Pick guardrail: demote picks that still hard-lose a clearly visible enemy threat.
 PICK_DIRECT_THREAT_GUARDRAIL_FLOOR: float = 0.08
-PICK_DIRECT_THREAT_GUARDRAIL_SCALE: float = 0.9
-PICK_DIRECT_THREAT_GUARDRAIL_CAP: float = 0.12
+PICK_DIRECT_THREAT_GUARDRAIL_SCALE: float = 1.1
+PICK_DIRECT_THREAT_GUARDRAIL_CAP: float = 0.15
 
 # Ban score static weights
 PREDRAFT_WEIGHT_TIER_RANK: float = 0.45
