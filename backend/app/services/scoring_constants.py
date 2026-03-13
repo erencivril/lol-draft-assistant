@@ -114,6 +114,11 @@ CONFIDENCE_CAP_INCOMPLETE_SCOPE: float = 0.72
 THIN_EVIDENCE_MULTIPLIER: float = 0.9
 THIN_EVIDENCE_GAME_THRESHOLD: int = 100
 
+# Pick guardrail: demote picks that still hard-lose a clearly visible enemy threat.
+PICK_DIRECT_THREAT_GUARDRAIL_FLOOR: float = 0.08
+PICK_DIRECT_THREAT_GUARDRAIL_SCALE: float = 0.9
+PICK_DIRECT_THREAT_GUARDRAIL_CAP: float = 0.12
+
 # Ban score static weights
 PREDRAFT_WEIGHT_TIER_RANK: float = 0.45
 PREDRAFT_WEIGHT_TIER: float = 0.25

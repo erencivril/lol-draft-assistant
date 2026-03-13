@@ -431,6 +431,218 @@ async def test_recommendation_prefers_counter_profile_over_higher_tier_pick(repo
 
 
 @pytest.mark.asyncio
+async def test_recommendation_demotes_pick_that_hard_loses_visible_threat(repository: DatabaseRepository) -> None:
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="ThreatAnswer", name="Threat Answer", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=2, key="BadMeta", name="Bad Meta", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=10, key="Talon", name="Talon", image_url="", roles=["jungle"], patch=patch),
+            ChampionRecord(champion_id=11, key="MissFortune", name="Miss Fortune", image_url="", roles=["bottom"], patch=patch),
+            ChampionRecord(champion_id=12, key="TahmKench", name="Tahm Kench", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=13, key="Zyra", name="Zyra", image_url="", roles=["support"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="emerald_plus",
+        role="jungle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=1,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                tier_rank=10,
+                win_rate=51.1,
+                pick_rate=6.0,
+                ban_rate=2.0,
+                tier_grade="A",
+                pbi=11.0,
+                games=12000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=2,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                tier_rank=3,
+                win_rate=52.1,
+                pick_rate=10.0,
+                ban_rate=8.0,
+                tier_grade="S",
+                pbi=18.0,
+                games=22000,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    await repository.replace_matchups(
+        region="TR",
+        rank_tier="emerald_plus",
+        role="jungle",
+        patch=patch,
+        records=[
+            MatchupRecord(
+                champion_id=1,
+                opponent_id=10,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="jungle",
+                win_rate=56.0,
+                delta1=2.0,
+                delta2=6.0,
+                games=1200,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=1,
+                opponent_id=11,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="bottom",
+                win_rate=51.0,
+                delta1=0.5,
+                delta2=1.5,
+                games=1500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=1,
+                opponent_id=12,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="top",
+                win_rate=50.5,
+                delta1=0.3,
+                delta2=0.8,
+                games=1500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=1,
+                opponent_id=13,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="support",
+                win_rate=50.5,
+                delta1=0.3,
+                delta2=0.8,
+                games=1500,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=2,
+                opponent_id=10,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="jungle",
+                win_rate=45.5,
+                delta1=-2.5,
+                delta2=-7.5,
+                games=220,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=2,
+                opponent_id=11,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="bottom",
+                win_rate=54.0,
+                delta1=1.3,
+                delta2=4.0,
+                games=2200,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=2,
+                opponent_id=12,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="top",
+                win_rate=53.0,
+                delta1=1.0,
+                delta2=3.0,
+                games=2200,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+            MatchupRecord(
+                champion_id=2,
+                opponent_id=13,
+                region="TR",
+                rank_tier="emerald_plus",
+                role="jungle",
+                opponent_role="support",
+                win_rate=52.0,
+                delta1=0.7,
+                delta2=2.0,
+                games=2200,
+                patch=patch,
+                source="test",
+                fetched_at="2026-03-12T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    bundle = await service.recommend(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="jungle",
+            my_team_picks=[TeamSlot(cell_id=1, champion_id=0, assigned_role="jungle", is_local_player=True)],
+            enemy_team_picks=[
+                TeamSlot(cell_id=6, champion_id=10, assigned_role="jungle"),
+                TeamSlot(cell_id=7, champion_id=11, assigned_role="bottom"),
+                TeamSlot(cell_id=8, champion_id=12, assigned_role="top"),
+                TeamSlot(cell_id=9, champion_id=13, assigned_role="support"),
+            ],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="emerald_plus", role="jungle"),
+        settings=UserSettings(top_n=2),
+    )
+
+    assert [item.champion_id for item in bundle.picks] == [1, 2]
+    assert any(component.key == "threat_guardrail" for component in bundle.picks[1].explanation.scoring)
+    assert any("still struggles into Talon" in penalty for penalty in bundle.picks[1].explanation.penalties)
+
+
+@pytest.mark.asyncio
 async def test_recommendation_does_not_fallback_to_nearby_rank(repository: DatabaseRepository) -> None:
     patch = "16.5.1"
 

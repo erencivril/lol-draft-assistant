@@ -9,7 +9,7 @@ import sqlite3
 
 from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
 from app.domain.draft import DraftState, RoleCandidate, TeamSlot
-from app.domain.recommendation import RecommendationBundle, RecommendationItem
+from app.domain.recommendation import RecommendationBundle, RecommendationItem, RecommendationScoreComponent
 from app.domain.ranks import normalize_rank_tier
 from app.domain.regions import normalize_region
 from app.domain.roles import normalize_role_name
@@ -37,6 +37,7 @@ from .scoring import (
     normalize_delta,
     normalize_synergy,
     role_fit_score,
+    RelationInsight,
     summarize_relations,
     tier_score,
 )
@@ -55,6 +56,9 @@ from .scoring_constants import (
     PICK_CONFIDENCE_GAMES_DIVISOR,
     PICK_CONFIDENCE_GAMES_MAX,
     PICK_CONFIDENCE_SAMPLE_WEIGHT,
+    PICK_DIRECT_THREAT_GUARDRAIL_CAP,
+    PICK_DIRECT_THREAT_GUARDRAIL_FLOOR,
+    PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
     SUPPORTED_ROLES,
     THIN_EVIDENCE_MULTIPLIER,
 )
@@ -738,6 +742,26 @@ class RecommendationService:
             )
         thin = has_thin_evidence(counter_summary, synergy_summary)
         total = max(0.0, composition.total * (THIN_EVIDENCE_MULTIPLIER if thin else 1.0))
+        threat_penalty, blocked_by = self._pick_threat_guardrail(counter_summary=counter_summary)
+        threat_penalty_note: str | None = None
+        if threat_penalty > 0 and blocked_by is not None:
+            total = max(0.0, total - threat_penalty)
+            composition.total = max(0.0, composition.total - threat_penalty)
+            blocked_role = blocked_by.role or "unknown"
+            composition.components.append(
+                RecommendationScoreComponent(
+                    key="threat_guardrail",
+                    label="Threat guardrail",
+                    value=round(-threat_penalty, 4),
+                    weight=1.0,
+                    contribution=round(-threat_penalty, 4),
+                    note=f"Visible enemy pressure from {blocked_by.champion_name} ({blocked_role})",
+                )
+            )
+            threat_penalty_note = (
+                f"Threat guardrail reduced this pick because it still struggles into "
+                f"{blocked_by.champion_name} ({blocked_role})."
+            )
         champion_name_val = self._champion_name(candidate.champion_id)
         ev_score = evidence_score(counter_summary.coverage, synergy_summary.coverage, enemy_slots, ally_slots)
         rc = combine_metric(enemy_context.role_certainty, ally_context.role_certainty, enemy_slots, ally_slots)
@@ -759,6 +783,8 @@ class RecommendationService:
             f"Counter coverage {counter_summary.coverage:.0%}",
             f"Synergy coverage {synergy_summary.coverage:.0%}",
         ]
+        if threat_penalty_note:
+            reasons.append(threat_penalty_note)
         reasons.extend(insight.summary for insight in counter_summary.insights[:2])
         reasons.extend(insight.summary for insight in synergy_summary.insights[:2])
         explanation = build_pick_explanation(
@@ -766,6 +792,8 @@ class RecommendationService:
             composition=composition, counter_summary=counter_summary, synergy_summary=synergy_summary,
             scenario_summary=combined_scenario_summary(enemy_context, ally_context), thin_evidence=thin,
         )
+        if threat_penalty_note:
+            explanation.penalties.insert(0, threat_penalty_note)
         return RecommendationItem(
             champion_id=candidate.champion_id, champion_name=champion_name_val,
             suggested_role=candidate.role, total_score=round(total * 100, 2), display_band=display_band(total * 100),
@@ -776,6 +804,23 @@ class RecommendationService:
             sample_confidence=round(sc, 4), thin_evidence=thin, confidence=round(confidence, 4),
             reasons=reasons, explanation=explanation,
         )
+
+    def _pick_threat_guardrail(
+        self, *, counter_summary
+    ) -> tuple[float, RelationInsight | None]:
+        blocked_by = min(
+            (insight for insight in counter_summary.insights if insight.net_contribution < 0.0),
+            key=lambda insight: insight.net_contribution,
+            default=None,
+        )
+        if blocked_by is None:
+            return 0.0, None
+        severity = abs(blocked_by.net_contribution)
+        penalty = min(
+            PICK_DIRECT_THREAT_GUARDRAIL_CAP,
+            max(0.0, severity - PICK_DIRECT_THREAT_GUARDRAIL_FLOOR) * PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
+        )
+        return penalty, blocked_by
 
     def _build_ban_recommendation(
         self,
