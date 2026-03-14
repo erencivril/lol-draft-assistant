@@ -23,7 +23,7 @@ class UserSettings(BaseModel):
     rank_override: str = "emerald"
     role_override: str = "middle"
     auto_refresh: bool = True
-    top_n: int = 4
+    top_n: int = 8
     weights: RecommendationWeights = Field(default_factory=RecommendationWeights)
 
     @field_validator("rank_override", mode="before")

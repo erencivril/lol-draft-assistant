@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 
-from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
+from app.db.repository import ChampionRecord, ChampionRoleHint, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
 from app.domain.draft import DraftState, RoleCandidate, TeamSlot
 from app.domain.recommendation import RecommendationBundle, RecommendationItem, RecommendationScoreComponent
 from app.domain.ranks import normalize_rank_tier
@@ -58,8 +58,11 @@ from .scoring_constants import (
     PICK_CONFIDENCE_GAMES_DIVISOR,
     PICK_CONFIDENCE_GAMES_MAX,
     PICK_CONFIDENCE_SAMPLE_WEIGHT,
-    PICK_COUNTER_MISSING_COVERAGE_PENALTY,
+    PICK_COUNTER_MISSING_COVERAGE_PENALTY_BASE,
+    PICK_COUNTER_MISSING_COVERAGE_PENALTY_CAP,
+    PICK_COUNTER_MISSING_COVERAGE_PENALTY_PER_ENEMY,
     PICK_DIRECT_THREAT_GUARDRAIL_CAP,
+    BAN_COUNTER_AMPLIFIER,
     PICK_DIRECT_THREAT_GUARDRAIL_FLOOR,
     PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
     SUPPORTED_ROLES,
@@ -339,6 +342,16 @@ class RecommendationService:
                     image_url=row["image_url"],
                     roles=json.loads(row["roles_json"]),
                     patch=row["patch"],
+                    primary_role=row["primary_role"],
+                    role_hints=[
+                        ChampionRoleHint(
+                            role=str(item.get("role", "")),
+                            weight=float(item.get("weight", 0.0)),
+                            games=int(item.get("games", 0)),
+                        )
+                        for item in json.loads(row["role_hints_json"] or "[]")
+                        if item.get("role")
+                    ],
                 )
 
             if not patch:
@@ -786,6 +799,10 @@ class RecommendationService:
     ) -> PickRecommendationDraft:
         enemy_slots = [slot for slot in enemy_context.slots if slot.champion_id]
         ally_slots = [slot for slot in ally_context.slots if slot.champion_id]
+        coverage_penalty_scale = min(
+            PICK_COUNTER_MISSING_COVERAGE_PENALTY_CAP,
+            PICK_COUNTER_MISSING_COVERAGE_PENALTY_BASE + PICK_COUNTER_MISSING_COVERAGE_PENALTY_PER_ENEMY * max(0, len(enemy_slots) - 1),
+        )
         counter_summary = summarize_relations(
             slots=enemy_slots,
             role_probabilities=enemy_context.role_probabilities,
@@ -806,7 +823,7 @@ class RecommendationService:
                 champion_name=self._champion_name(slot.champion_id),
             ),
             candidate_role=candidate.role,
-            missing_penalty_scale=PICK_COUNTER_MISSING_COVERAGE_PENALTY,
+            missing_penalty_scale=coverage_penalty_scale,
         )
         synergy_summary = summarize_relations(
             slots=ally_slots,
@@ -884,12 +901,13 @@ class RecommendationService:
             confidence = min(confidence, CONFIDENCE_CAP_INCOMPLETE_SCOPE)
         if enemy_slots:
             hierarchy_total = pick_hierarchy_score(
-                counter_band=pick_counter_band(counter_summary.score),
+                counter_band=pick_counter_band(counter_summary.score, len(enemy_slots)),
                 worst_enemy_score=counter_summary.worst_score,
                 board_counter_score=counter_summary.score,
                 tier_secondary_score=tier_secondary,
                 synergy_secondary_score=synergy_summary.score,
                 confidence=confidence,
+                enemy_count=len(enemy_slots),
             )
             total = max(
                 0.0,
@@ -932,7 +950,7 @@ class RecommendationService:
         return PickRecommendationDraft(
             item=item,
             has_visible_enemies=bool(enemy_slots),
-            counter_band=pick_counter_band(counter_summary.score) if enemy_slots else 0,
+            counter_band=pick_counter_band(counter_summary.score, len(enemy_slots)) if enemy_slots else 0,
             worst_enemy_score=counter_summary.worst_score,
             board_counter_score=counter_summary.score,
             tier_secondary_score=tier_secondary,
@@ -1037,9 +1055,10 @@ class RecommendationService:
         ban_rate = candidate.record.ban_rate
         pick_rate_score = min(pick_rate / 20.0, 1.0) if pick_rate else 0.4
         ban_rate_score = min(ban_rate / 30.0, 1.0) if ban_rate else 0.3
+        amplified_counter = counter_summary.score * BAN_COUNTER_AMPLIFIER if ally_slots else counter_summary.score
         composition = compose_ban_score(
             tier_threat=tier_threat, pick_rate_score=pick_rate_score, ban_rate_score=ban_rate_score,
-            counter_threat=counter_summary.score, synergy_threat=synergy_summary.score,
+            counter_threat=amplified_counter, synergy_threat=synergy_summary.score,
             matchup_slots_present=bool(ally_slots), synergy_slots_present=bool(enemy_slots),
             role_likelihood_score=candidate.role_prior,
         )

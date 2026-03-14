@@ -21,10 +21,11 @@ from .scoring_constants import (
     DISPLAY_BAND_SITUATIONAL,
     DISPLAY_BAND_STRONG,
     LANE_PROXIMITY,
+    LATE_DRAFT_COUNTER_BOOST_MAX,
+    LATE_DRAFT_COUNTER_BOOST_PER_ENEMY,
     MATCHUP_SHRINKAGE_PRIOR,
     PBI_NORMALIZATION_SCALE,
     PICK_COUNTER_BAND_WINDOW,
-    PICK_COUNTER_MISSING_COVERAGE_PENALTY,
     PICK_HIERARCHY_BOARD_COUNTER_WEIGHT,
     PICK_HIERARCHY_CONFIDENCE_WEIGHT,
     PICK_HIERARCHY_SYNERGY_WEIGHT,
@@ -35,15 +36,11 @@ from .scoring_constants import (
     PREDRAFT_WEIGHT_TIER,
     PREDRAFT_WEIGHT_TIER_RANK,
     RELATION_SHRINKAGE_PRIOR_GAMES,
-    ROLE_FIT_HIGH_PICK_RATE,
-    ROLE_FIT_MEDIUM_PICK_RATE,
     SAMPLE_THRESHOLD_IGNORE,
     SYNERGY_EDGE_SCALE,
     SYNERGY_SHRINKAGE_PRIOR,
     TIER_GAMES_HIGH,
-    TIER_GAMES_MEDIUM,
     TIER_PENALTY_LOW,
-    TIER_PENALTY_MEDIUM,
     TIER_SCORES,
 )
 
@@ -378,7 +375,7 @@ def compose_pick_score(
             components=components,
         )
 
-    counter_band = pick_counter_band(counter_score)
+    counter_band = pick_counter_band(counter_score, enemy_count)
     hierarchy_total = pick_hierarchy_score(
         counter_band=counter_band,
         worst_enemy_score=worst_enemy_score,
@@ -386,6 +383,7 @@ def compose_pick_score(
         tier_secondary_score=tier_secondary_score,
         synergy_secondary_score=synergy_score,
         confidence=0.0,
+        enemy_count=enemy_count,
     )
     components = [
         RecommendationScoreComponent(
@@ -393,7 +391,7 @@ def compose_pick_score(
             label="Counter band",
             value=round(float(counter_band), 4),
             weight=1.0,
-            contribution=round(counter_band / max(pick_counter_band(1.0), 1), 4),
+            contribution=round(counter_band / max(pick_counter_band(1.0, enemy_count), 1), 4),
             note=f"Primary ranking band over visible enemy delta2 profile (window {PICK_COUNTER_BAND_WINDOW:.2f})",
         ),
         RecommendationScoreComponent(
@@ -558,10 +556,12 @@ def relation_to_unit_interval(value: float) -> float:
     return (clamp_relation_score(value) + 1.0) / 2.0
 
 
-def pick_counter_band(counter_score: float) -> int:
-    max_band = int(2.0 / PICK_COUNTER_BAND_WINDOW)
+def pick_counter_band(counter_score: float, enemy_count: int = 1) -> int:
+    boost = min(LATE_DRAFT_COUNTER_BOOST_MAX, LATE_DRAFT_COUNTER_BOOST_PER_ENEMY * enemy_count)
+    effective_window = max(0.015, PICK_COUNTER_BAND_WINDOW * (1.0 - boost))
+    max_band = int(2.0 / effective_window)
     clamped = clamp_relation_score(counter_score)
-    band = int((clamped + 1.0) / PICK_COUNTER_BAND_WINDOW)
+    band = int((clamped + 1.0) / effective_window)
     return max(0, min(max_band, band))
 
 
@@ -573,8 +573,9 @@ def pick_hierarchy_score(
     tier_secondary_score: float,
     synergy_secondary_score: float,
     confidence: float,
+    enemy_count: int = 1,
 ) -> float:
-    max_band = max(pick_counter_band(1.0), 1)
+    max_band = max(pick_counter_band(1.0, enemy_count), 1)
     within_band = (
         relation_to_unit_interval(worst_enemy_score) * PICK_HIERARCHY_WORST_ENEMY_WEIGHT
         + relation_to_unit_interval(board_counter_score) * PICK_HIERARCHY_BOARD_COUNTER_WEIGHT

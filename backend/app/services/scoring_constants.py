@@ -29,36 +29,19 @@ RELATION_SHRINKAGE_PRIOR_GAMES: float = 100.0
 MATCHUP_SHRINKAGE_PRIOR: float = 200.0
 SYNERGY_SHRINKAGE_PRIOR: float = 150.0
 
-COUNTER_BUDGET_BASE: float = 0.09
-COUNTER_BUDGET_PER_ENEMY: float = 0.09
-COUNTER_BUDGET_CAP: float = 0.55
-
-SYNERGY_BUDGET_BASE: float = 0.02
-SYNERGY_BUDGET_PER_ALLY: float = 0.02
-SYNERGY_BUDGET_CAP: float = 0.12
-
 # Late-draft counter boost: as more champions are visible, direct matchup info should dominate harder.
 LATE_DRAFT_COUNTER_BOOST_MAX: float = 0.35
+LATE_DRAFT_COUNTER_BOOST_PER_ENEMY: float = 0.07
 
 COUNTER_EDGE_SCALE: float = 7.0
 SYNERGY_EDGE_SCALE: float = 10.0
 
-# Evidence multiplier parameters
-EVIDENCE_BASE_MULTIPLIER: float = 0.7
-EVIDENCE_COVERAGE_WEIGHT: float = 0.3
-
 # Low-sample tier penalty thresholds
 TIER_GAMES_HIGH: int = 5000
-TIER_GAMES_MEDIUM: int = 2000
-TIER_PENALTY_MEDIUM: float = 0.05
 TIER_PENALTY_LOW: float = 0.10
 
 # PBI normalization scale - PBI values rarely exceed 30 in practice
 PBI_NORMALIZATION_SCALE: float = 30.0
-
-# Role fit thresholds (kept for backward compatibility, no longer used in scoring)
-ROLE_FIT_HIGH_PICK_RATE: float = 5.0
-ROLE_FIT_MEDIUM_PICK_RATE: float = 1.0
 
 # Lane proximity weights: how much a matchup/synergy matters based on role pair
 # Same-lane = 1.0, adjacent = ~0.85, distant = ~0.55
@@ -115,11 +98,13 @@ THIN_EVIDENCE_MULTIPLIER: float = 0.9
 THIN_EVIDENCE_GAME_THRESHOLD: int = 100
 
 # Pick guardrail: demote picks that still hard-lose a clearly visible enemy threat.
-PICK_DIRECT_THREAT_GUARDRAIL_FLOOR: float = 0.08
-PICK_DIRECT_THREAT_GUARDRAIL_SCALE: float = 1.1
-PICK_DIRECT_THREAT_GUARDRAIL_CAP: float = 0.15
+PICK_DIRECT_THREAT_GUARDRAIL_FLOOR: float = 0.03
+PICK_DIRECT_THREAT_GUARDRAIL_SCALE: float = 1.5
+PICK_DIRECT_THREAT_GUARDRAIL_CAP: float = 0.22
 PICK_COUNTER_BAND_WINDOW: float = 0.03
-PICK_COUNTER_MISSING_COVERAGE_PENALTY: float = 0.18
+PICK_COUNTER_MISSING_COVERAGE_PENALTY_BASE: float = 0.12
+PICK_COUNTER_MISSING_COVERAGE_PENALTY_PER_ENEMY: float = 0.04
+PICK_COUNTER_MISSING_COVERAGE_PENALTY_CAP: float = 0.30
 PICK_HIERARCHY_WORST_ENEMY_WEIGHT: float = 0.5
 PICK_HIERARCHY_BOARD_COUNTER_WEIGHT: float = 0.25
 PICK_HIERARCHY_TIER_WEIGHT: float = 0.125
@@ -136,8 +121,9 @@ BAN_WEIGHT_TIER: float = 0.34
 BAN_WEIGHT_ROLE_LIKELIHOOD: float = 0.24
 BAN_WEIGHT_PICK_RATE: float = 0.24
 BAN_WEIGHT_BAN_RATE: float = 0.18
-BAN_WEIGHT_COUNTER: float = 0.16
-BAN_WEIGHT_SYNERGY: float = 0.08
+BAN_WEIGHT_COUNTER: float = 0.38
+BAN_WEIGHT_SYNERGY: float = 0.10
+BAN_COUNTER_AMPLIFIER: float = 1.25
 
 DISPLAY_BAND_ELITE: float = 75.0
 DISPLAY_BAND_STRONG: float = 60.0
