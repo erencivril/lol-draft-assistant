@@ -161,7 +161,7 @@ describe("DraftBoard", () => {
     expect(onSlotRoleChange).toHaveBeenCalledWith("enemy", 6, "support");
   });
 
-  it("shows unknown instead of defaulting empty enemy roles to top", () => {
+  it("shows auto-detect instead of defaulting empty enemy roles to top", () => {
     const unknownRoleDraftState: DraftState = {
       ...draftState,
       enemy_team_picks: [
@@ -193,7 +193,7 @@ describe("DraftBoard", () => {
 
     const roleSelect = screen.getByLabelText("Enemy 1 role");
     expect(roleSelect).toHaveValue("__unknown__");
-    expect(within(roleSelect).getByRole("option", { name: "Unknown" })).toBeInTheDocument();
+    expect(within(roleSelect).getByRole("option", { name: "Auto-detect" })).toBeInTheDocument();
   });
 
   it("shows inferred enemy roles and confidence directly on the board", () => {

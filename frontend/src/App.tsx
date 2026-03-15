@@ -83,7 +83,12 @@ function loadStoredFilters(): AnalysisFilters {
   }
 }
 
-function createBaseSlot(cellId: number, role: string | null, isLocalPlayer = false): TeamSlot {
+function createBaseSlot(
+  cellId: number,
+  role: string | null,
+  isLocalPlayer = false,
+  softDefault = false,
+): TeamSlot {
   const normalizedRole = role && roleOrder.includes(role) ? role : null;
 
   return {
@@ -93,9 +98,9 @@ function createBaseSlot(cellId: number, role: string | null, isLocalPlayer = fal
     champion_image_url: null,
     assigned_role: normalizedRole,
     effective_role: normalizedRole,
-    role_source: normalizedRole ? "manual" : "unknown",
-    role_confidence: normalizedRole ? 1 : 0,
-    role_candidates: normalizedRole ? [{ role: normalizedRole, confidence: 1 }] : [],
+    role_source: normalizedRole ? (softDefault ? "inferred" : "manual") : "unknown",
+    role_confidence: normalizedRole ? (softDefault ? 0.5 : 1) : 0,
+    role_candidates: normalizedRole ? [{ role: normalizedRole, confidence: softDefault ? 0.5 : 1 }] : [],
     is_local_player: isLocalPlayer,
   };
 }
@@ -112,7 +117,7 @@ function createManualDraftState(localRole: string): DraftState {
     current_actor_cell_id: localPlayerCellId,
     current_action_type: "pick",
     my_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 1, role, role === safeRole)),
-    enemy_team_picks: roleOrder.map((_, index) => createBaseSlot(index + 6, null)),
+    enemy_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 6, role, false, true)),
     my_team_declared_roles: [safeRole],
     enemy_team_declared_roles: [],
     my_bans: [0, 0, 0, 0, 0],
@@ -683,16 +688,27 @@ export default function App() {
         ...currentDraft,
         enemy_team_picks: currentDraft.enemy_team_picks.map((slot) => {
           if (slot.cell_id === cellId) {
+            if (role) {
+              return { ...slot, ...createRoleSnapshot(role) };
+            }
+            // Clearing: fall back to positional default instead of "Unknown"
+            const positionalRole = roleOrder[slot.cell_id - 6] ?? null;
             return {
               ...slot,
-              ...createRoleSnapshot(role || null),
+              ...createRoleSnapshot(positionalRole),
+              role_source: positionalRole ? "inferred" : "unknown",
+              role_confidence: positionalRole ? 0.5 : 0,
             };
           }
 
           if (enemyRoleResolution?.releasedCellId === slot.cell_id) {
+            // Released slot also resets to positional default
+            const positionalRole = roleOrder[slot.cell_id - 6] ?? null;
             return {
               ...slot,
-              ...createRoleSnapshot(null),
+              ...createRoleSnapshot(positionalRole),
+              role_source: positionalRole ? "inferred" : "unknown",
+              role_confidence: positionalRole ? 0.5 : 0,
             };
           }
 

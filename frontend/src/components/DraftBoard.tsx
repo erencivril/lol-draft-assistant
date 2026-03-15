@@ -47,7 +47,7 @@ function normalizeChampionImageUrl(url?: string | null) {
 }
 
 function roleLabel(role?: string | null) {
-  return role ? role.charAt(0).toUpperCase() + role.slice(1) : "Unknown";
+  return role ? role.charAt(0).toUpperCase() + role.slice(1) : "Auto";
 }
 
 function roleSourceLabel(slot: TeamSlot) {
@@ -175,7 +175,7 @@ function SlotCard({
             onRoleChange(event.target.value === unknownRoleValue ? "" : event.target.value)
           }
         >
-          <option value={unknownRoleValue}>Unknown</option>
+          <option value={unknownRoleValue}>Auto-detect</option>
           {roleOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
