@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 
-from app.db.repository import ChampionRecord, ChampionRoleHint, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
+from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
 from app.domain.draft import DraftState, RoleCandidate, TeamSlot
 from app.domain.recommendation import RecommendationBundle, RecommendationItem, RecommendationScoreComponent
 from app.domain.ranks import normalize_rank_tier
@@ -58,11 +58,11 @@ from .scoring_constants import (
     PICK_CONFIDENCE_GAMES_DIVISOR,
     PICK_CONFIDENCE_GAMES_MAX,
     PICK_CONFIDENCE_SAMPLE_WEIGHT,
+    BAN_COUNTER_AMPLIFIER,
     PICK_COUNTER_MISSING_COVERAGE_PENALTY_BASE,
     PICK_COUNTER_MISSING_COVERAGE_PENALTY_CAP,
     PICK_COUNTER_MISSING_COVERAGE_PENALTY_PER_ENEMY,
     PICK_DIRECT_THREAT_GUARDRAIL_CAP,
-    BAN_COUNTER_AMPLIFIER,
     PICK_DIRECT_THREAT_GUARDRAIL_FLOOR,
     PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
     SUPPORTED_ROLES,
@@ -342,16 +342,6 @@ class RecommendationService:
                     image_url=row["image_url"],
                     roles=json.loads(row["roles_json"]),
                     patch=row["patch"],
-                    primary_role=row["primary_role"],
-                    role_hints=[
-                        ChampionRoleHint(
-                            role=str(item.get("role", "")),
-                            weight=float(item.get("weight", 0.0)),
-                            games=int(item.get("games", 0)),
-                        )
-                        for item in json.loads(row["role_hints_json"] or "[]")
-                        if item.get("role")
-                    ],
                 )
 
             if not patch:
