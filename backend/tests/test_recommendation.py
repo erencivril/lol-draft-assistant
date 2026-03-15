@@ -2672,3 +2672,68 @@ def test_recommend_request_rejects_invalid_target_cell_id() -> None:
                 "bans": [],
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_two_mid_primary_enemies_get_unique_effective_roles(repository: DatabaseRepository) -> None:
+    """When two mid-primary champions are picked by the enemy, they must NOT both display as middle."""
+    patch = "16.5.1"
+
+    await repository.upsert_champions(
+        [
+            ChampionRecord(champion_id=1, key="Garen", name="Garen", image_url="", roles=["top"], patch=patch),
+            ChampionRecord(champion_id=2, key="Ahri", name="Ahri", image_url="", roles=["middle"], patch=patch),
+            ChampionRecord(champion_id=3, key="Fizz", name="Fizz", image_url="", roles=["middle"], patch=patch),
+        ]
+    )
+
+    await repository.replace_tier_stats(
+        region="TR",
+        rank_tier="silver",
+        role="middle",
+        patch=patch,
+        records=[
+            TierStatRecord(
+                champion_id=1, region="TR", rank_tier="silver", role="middle",
+                win_rate=52.0, pick_rate=8.0, ban_rate=4.0, tier_grade="A",
+                games=30000, patch=patch, source="test", fetched_at="2026-03-09T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=2, region="TR", rank_tier="silver", role="middle",
+                win_rate=53.0, pick_rate=12.0, ban_rate=6.0, tier_grade="S",
+                games=40000, patch=patch, source="test", fetched_at="2026-03-09T00:00:00+00:00",
+            ),
+            TierStatRecord(
+                champion_id=3, region="TR", rank_tier="silver", role="middle",
+                win_rate=52.5, pick_rate=10.0, ban_rate=5.0, tier_grade="A",
+                games=35000, patch=patch, source="test", fetched_at="2026-03-09T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    service = RecommendationService(repository)
+    await service.rebuild_indexes()
+
+    snapshot = await service.analyze(
+        draft_state=DraftState(
+            local_player_cell_id=1,
+            local_player_assigned_role="middle",
+            my_team_picks=[TeamSlot(cell_id=1, champion_id=0, assigned_role="middle", is_local_player=True)],
+            enemy_team_picks=[
+                TeamSlot(cell_id=6, champion_id=2, assigned_role=None),
+                TeamSlot(cell_id=7, champion_id=3, assigned_role=None),
+            ],
+            my_bans=[],
+            enemy_bans=[],
+            session_status="active",
+        ),
+        filters=ResolvedFilters(region="TR", rank_tier="silver", role="middle"),
+        settings=UserSettings(top_n=2),
+    )
+
+    enemy_roles = [slot.effective_role for slot in snapshot.draft_state.enemy_team_picks]
+    # Both Ahri and Fizz are mid-primary, but only one should display as middle
+    assert len(set(enemy_roles)) == len(enemy_roles), (
+        f"Duplicate effective roles on enemy team: {enemy_roles}"
+    )
+    assert "middle" in enemy_roles

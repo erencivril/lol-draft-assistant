@@ -96,6 +96,30 @@ def resolve_team_context(
             role_probabilities.setdefault(cell_id, {})
             role_probabilities[cell_id][role] = role_probabilities[cell_id].get(role, 0.0) + scenario.probability
 
+    # Greedy unique effective_role assignment: prevent two slots from showing the same role.
+    # Scoring uses full role_probabilities (already unique per scenario), but effective_role
+    # is the single "best guess" shown in the UI — duplicates would confuse users.
+    claimed_roles: set[str] = set(fixed_roles.values())
+    inferred_assignments: list[tuple[int, str, float, list[tuple[str, float]]]] = []
+    for slot in slots:
+        if slot.cell_id not in role_probabilities or slot.cell_id in fixed_roles or not slot.champion_id:
+            continue
+        sorted_roles = sorted(role_probabilities[slot.cell_id].items(), key=lambda item: item[1], reverse=True)
+        top_role, top_conf = sorted_roles[0]
+        inferred_assignments.append((slot.cell_id, top_role, top_conf, sorted_roles))
+    # Assign highest-confidence slots first so the most certain champion keeps its best role
+    inferred_assignments.sort(key=lambda item: item[2], reverse=True)
+    effective_role_map: dict[int, tuple[str, float, list[tuple[str, float]]]] = {}
+    for cell_id, _top_role, _top_conf, sorted_roles in inferred_assignments:
+        for role, prob in sorted_roles:
+            if role not in claimed_roles:
+                claimed_roles.add(role)
+                effective_role_map[cell_id] = (role, prob, sorted_roles)
+                break
+        else:
+            # All roles taken — fall back to highest probability (duplicate display, but rare)
+            effective_role_map[cell_id] = (sorted_roles[0][0], sorted_roles[0][1], sorted_roles)
+
     decorated_slots: list[TeamSlot] = []
     inferred_count = 0
     role_confidences: list[float] = []
@@ -109,9 +133,8 @@ def resolve_team_context(
                     "role_candidates": [RoleCandidate(role=fixed_roles[slot.cell_id], confidence=1.0)],
                 }
             )
-        elif slot.champion_id and slot.cell_id in role_probabilities:
-            sorted_roles = sorted(role_probabilities[slot.cell_id].items(), key=lambda item: item[1], reverse=True)
-            effective_role, confidence = sorted_roles[0]
+        elif slot.champion_id and slot.cell_id in effective_role_map:
+            effective_role, confidence, sorted_roles = effective_role_map[slot.cell_id]
             resolved = slot.model_copy(
                 update={
                     "effective_role": effective_role,
