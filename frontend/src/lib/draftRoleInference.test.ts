@@ -215,7 +215,7 @@ describe("inferDraftRoles", () => {
     expect(resolved.enemy_team_picks[1].role_source).toBe("manual");
   });
 
-  it("keeps multiple open enemy slots unknown until a lane is forced", () => {
+  it("assigns remaining roles to empty enemy slots so every slot has a role", () => {
     const draftState: DraftState = {
       ...baseDraftState,
       enemy_team_picks: [
@@ -247,10 +247,12 @@ describe("inferDraftRoles", () => {
 
     const resolved = inferDraftRoles(draftState, championLookup);
 
-    expect(resolved.enemy_team_picks[2].effective_role).toBeNull();
-    expect(resolved.enemy_team_picks[2].role_source).toBe("unknown");
-    expect(resolved.enemy_team_picks[3].effective_role).toBeNull();
-    expect(resolved.enemy_team_picks[3].role_source).toBe("unknown");
+    // Empty slots get the remaining unoccupied roles (jungle, bottom)
+    const emptyRoles = [resolved.enemy_team_picks[2].effective_role, resolved.enemy_team_picks[3].effective_role];
+    expect(emptyRoles).toContain("jungle");
+    expect(emptyRoles).toContain("bottom");
+    expect(resolved.enemy_team_picks[2].role_source).toBe("inferred");
+    expect(resolved.enemy_team_picks[3].role_source).toBe("inferred");
   });
 
   it("assigns the last remaining lane to a single open enemy slot", () => {

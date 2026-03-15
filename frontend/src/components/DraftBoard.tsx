@@ -52,8 +52,7 @@ function roleLabel(role?: string | null) {
 
 function roleSourceLabel(slot: TeamSlot) {
   if (slot.role_source === "inferred") {
-    const confidence = Math.round(slot.role_confidence * 100);
-    return confidence > 0 ? `INFERRED ${confidence}%` : "INFERRED";
+    return "AUTO";
   }
 
   return slot.role_source === "manual" ? "MANUAL" : slot.role_source.toUpperCase();
@@ -170,12 +169,9 @@ function SlotCard({
         <select
           aria-label={`${title} role`}
           className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
-          value={slot.effective_role ?? slot.assigned_role ?? unknownRoleValue}
-          onChange={(event) =>
-            onRoleChange(event.target.value === unknownRoleValue ? "" : event.target.value)
-          }
+          value={slot.effective_role ?? slot.assigned_role ?? roleOptions[0].value}
+          onChange={(event) => onRoleChange(event.target.value)}
         >
-          <option value={unknownRoleValue}>Auto-detect</option>
           {roleOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -187,7 +183,17 @@ function SlotCard({
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
         <span>{roleLabel(slot.effective_role ?? slot.assigned_role)}</span>
         <div className="flex items-center gap-3">
-          <span>{roleSourceLabel(slot)}</span>
+          {slot.role_source === "manual" ? (
+            <button
+              type="button"
+              className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300 transition-colors hover:border-amber-400/50 hover:text-amber-200"
+              onClick={() => onRoleChange("")}
+            >
+              Manual — reset
+            </button>
+          ) : (
+            <span>{roleSourceLabel(slot)}</span>
+          )}
           {onSelectTarget ? (
             <button
               type="button"

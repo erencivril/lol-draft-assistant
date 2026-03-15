@@ -161,8 +161,8 @@ describe("DraftBoard", () => {
     expect(onSlotRoleChange).toHaveBeenCalledWith("enemy", 6, "support");
   });
 
-  it("shows auto-detect instead of defaulting empty enemy roles to top", () => {
-    const unknownRoleDraftState: DraftState = {
+  it("defaults to first role option when slot has no effective role", () => {
+    const noRoleDraftState: DraftState = {
       ...draftState,
       enemy_team_picks: [
         {
@@ -179,7 +179,7 @@ describe("DraftBoard", () => {
     render(
       <DraftBoard
         champions={champions}
-        draftState={unknownRoleDraftState}
+        draftState={noRoleDraftState}
         lcuConnected
         targetCellId={3}
         localPlayerCellId={3}
@@ -192,8 +192,8 @@ describe("DraftBoard", () => {
     );
 
     const roleSelect = screen.getByLabelText("Enemy 1 role");
-    expect(roleSelect).toHaveValue("__unknown__");
-    expect(within(roleSelect).getByRole("option", { name: "Auto-detect" })).toBeInTheDocument();
+    // Falls back to first role option when no effective role is set
+    expect(roleSelect).toHaveValue("top");
   });
 
   it("shows inferred enemy roles and confidence directly on the board", () => {
@@ -229,7 +229,7 @@ describe("DraftBoard", () => {
     const enemyCard = screen.getByText("Enemy 1").closest("article");
 
     expect(screen.getByLabelText("Enemy 1 role")).toHaveValue("support");
-    expect(screen.getByText("INFERRED 79%")).toBeInTheDocument();
+    expect(screen.getByText("AUTO")).toBeInTheDocument();
     const supportSummary = within(enemyCard as HTMLElement)
       .getAllByText("Support")
       .find((node) => node.tagName === "SPAN");
