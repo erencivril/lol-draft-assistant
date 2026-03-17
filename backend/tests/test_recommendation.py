@@ -2657,21 +2657,22 @@ async def test_recommendation_treats_target_slot_pick_as_replaceable(
     assert [item.champion_id for item in bundle.picks[:2]] == [20, 21]
 
 
-def test_recommend_request_rejects_invalid_target_cell_id() -> None:
-    with pytest.raises(ValidationError):
-        RecommendRequest.model_validate(
-            {
-                "region": "TR",
-                "rank_tier": "emerald",
-                "target_cell_id": 4,
-                "ally_slots": [
-                    {"cell_id": 1, "champion_id": 1, "role": "middle", "is_local_player": True},
-                    {"cell_id": 2, "champion_id": 0, "role": "jungle", "is_local_player": False},
-                ],
-                "enemy_slots": [],
-                "bans": [],
-            }
-        )
+def test_recommend_request_repairs_invalid_target_cell_id() -> None:
+    # Defensive validator auto-repairs an out-of-range target_cell_id
+    req = RecommendRequest.model_validate(
+        {
+            "region": "TR",
+            "rank_tier": "emerald",
+            "target_cell_id": 4,
+            "ally_slots": [
+                {"cell_id": 1, "champion_id": 1, "role": "middle", "is_local_player": True},
+                {"cell_id": 2, "champion_id": 0, "role": "jungle", "is_local_player": False},
+            ],
+            "enemy_slots": [],
+            "bans": [],
+        }
+    )
+    assert req.target_cell_id == 1  # repaired to first ally slot
 
 
 @pytest.mark.asyncio

@@ -48,12 +48,21 @@ class RecommendRequest(BaseModel):
     @model_validator(mode="after")
     def validate_slots(self) -> "RecommendRequest":
         ally_cell_ids = {slot.cell_id for slot in self.ally_slots}
-        if self.target_cell_id not in ally_cell_ids:
-            raise ValueError("target_cell_id must reference an ally slot")
-        local_slots = [slot for slot in self.ally_slots if slot.is_local_player]
-        if len(local_slots) != 1:
-            raise ValueError("ally_slots must include exactly one local player slot")
+        if self.target_cell_id not in ally_cell_ids and self.ally_slots:
+            self.target_cell_id = self.ally_slots[0].cell_id
+        local_slots = [s for s in self.ally_slots if s.is_local_player]
+        if len(local_slots) == 0 and self.ally_slots:
+            self.ally_slots[0].is_local_player = True
+        elif len(local_slots) > 1:
+            for s in local_slots[1:]:
+                s.is_local_player = False
         return self
+
+
+class RoleHintItem(BaseModel):
+    role: str
+    weight: float
+    games: int
 
 
 class ChampionLookupItem(BaseModel):
@@ -63,6 +72,8 @@ class ChampionLookupItem(BaseModel):
     image_url: str
     roles: list[str]
     patch: str
+    primary_role: str | None = None
+    role_hints: list[RoleHintItem] = Field(default_factory=list)
 
 
 def _build_slots(
@@ -137,6 +148,11 @@ async def get_champions(request: Request) -> dict[int, ChampionLookupItem]:
             image_url=champion.image_url,
             roles=champion.roles,
             patch=champion.patch,
+            primary_role=champion.primary_role,
+            role_hints=[
+                RoleHintItem(role=h.role, weight=h.weight, games=h.games)
+                for h in champion.role_hints
+            ],
         )
         for champion_id, champion in sorted(service.champion_lookup.items(), key=lambda item: item[1].name)
     }

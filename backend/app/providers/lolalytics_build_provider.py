@@ -18,6 +18,24 @@ logger = logging.getLogger("lda.providers.lolalytics_build")
 LOLALYTICS_BUILD_BASE = "https://lolalytics.com/lol"
 CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 
+_TIER_MAP: dict[str, str] = {
+    "iron": "all",
+    "bronze": "all",
+    "silver": "gold_plus",
+    "gold": "gold_plus",
+    "platinum": "platinum_plus",
+    "emerald": "emerald_plus",
+    "diamond": "diamond_plus",
+    "master": "diamond_plus",
+    "grandmaster": "grandmaster_plus",
+    "challenger": "grandmaster_plus",
+}
+
+
+def _normalize_tier(tier: str) -> str:
+    """Map single-rank tiers to nearest _plus aggregate tier for q-data.json URLs."""
+    return _TIER_MAP.get(tier, tier)
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -419,23 +437,24 @@ class LolalyticsBuildsProvider:
         if cached is not None:
             return cached
 
+        normalized_tier = _normalize_tier(tier)
         if opponent_slug and opponent_role:
             url = (
                 f"{LOLALYTICS_BUILD_BASE}/{champion_slug}/vs/{opponent_slug}"
-                f"/build/q-data.json?lane={role}&vslane={opponent_role}&tier={tier}"
+                f"/build/q-data.json?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
             )
             referer = (
                 f"https://lolalytics.com/lol/{champion_slug}/vs/{opponent_slug}"
-                f"/build/?lane={role}&vslane={opponent_role}&tier={tier}"
+                f"/build/?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
             )
         else:
             url = (
                 f"{LOLALYTICS_BUILD_BASE}/{champion_slug}"
-                f"/build/q-data.json?lane={role}&tier={tier}"
+                f"/build/q-data.json?lane={role}&tier={normalized_tier}"
             )
             referer = (
                 f"https://lolalytics.com/lol/{champion_slug}"
-                f"/build/?lane={role}&tier={tier}"
+                f"/build/?lane={role}&tier={normalized_tier}"
             )
 
         async with self._semaphore:

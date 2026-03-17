@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS champions (
     name TEXT NOT NULL,
     image_url TEXT NOT NULL,
     roles_json TEXT NOT NULL,
+    primary_role TEXT,
+    role_hints_json TEXT NOT NULL DEFAULT '[]',
     patch TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

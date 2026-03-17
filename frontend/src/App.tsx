@@ -18,6 +18,7 @@ import { DraftBoard } from "./components/DraftBoard";
 import { PhaseIndicator } from "./components/PhaseIndicator";
 import { RecommendationPanel } from "./components/RecommendationPanel";
 import { inferDraftRoles } from "./lib/draftRoleInference";
+import { buildFullRunePage } from "./lib/runePageBuilder";
 import { Toast } from "./components/Toast";
 import { roleOptions } from "./constants/filters";
 import type {
@@ -362,7 +363,6 @@ export function buildRecommendPayload(
   return {
     region: filters.region,
     rank_tier: filters.rank_tier,
-    role: targetRole,
     target_cell_id: targetCellId,
     ally_slots: draftState.my_team_picks.map((slot) => ({
       cell_id: slot.cell_id,
@@ -375,18 +375,6 @@ export function buildRecommendPayload(
       champion_id: slot.champion_id,
       role: slot.effective_role ?? slot.assigned_role ?? null,
     })),
-    ally_picks: draftState.my_team_picks
-      .filter((slot) => slot.cell_id !== targetCellId && slot.champion_id > 0)
-      .map((slot) => ({
-        champion_id: slot.champion_id,
-        role: slot.effective_role ?? slot.assigned_role ?? null,
-      })),
-    enemy_picks: draftState.enemy_team_picks
-      .filter((slot) => slot.champion_id > 0)
-      .map((slot) => ({
-        champion_id: slot.champion_id,
-        role: slot.effective_role ?? slot.assigned_role ?? null,
-      })),
     bans: [...draftState.my_bans, ...draftState.enemy_bans].filter((championId) => championId > 0),
   };
 }
@@ -646,9 +634,9 @@ export default function App() {
       champion_id: localSlotForRunes.champion_id,
       role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
       enemies,
-      rank_tier: "emerald_plus",
+      rank_tier: filters.rank_tier,
     });
-  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks]);
+  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, filters.rank_tier]);
 
   useEffect(() => {
     if (!localSlotForRunes || !runeRequestFingerprint) {
@@ -665,7 +653,7 @@ export default function App() {
         champion_id: localSlotForRunes.champion_id,
         role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
         enemy_slots: enemies,
-        rank_tier: "emerald_plus",
+        rank_tier: filters.rank_tier,
       })
         .then((result) => { if (!cancelled) startTransition(() => setRuneRecommendations(result)); })
         .catch((err: unknown) => { if (!cancelled) console.error("[rune-recommend] failed:", err); })
@@ -687,9 +675,9 @@ export default function App() {
       role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
       keystone_id: playerRunes?.keystone_id ?? null,
       enemies,
-      rank_tier: "emerald_plus",
+      rank_tier: filters.rank_tier,
     });
-  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id]);
+  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id, filters.rank_tier]);
 
   useEffect(() => {
     if (!buildRequestFingerprint || !localSlotForRunes) {
@@ -707,7 +695,7 @@ export default function App() {
         role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
         keystone_id: playerRunes?.keystone_id ?? null,
         enemy_slots: enemies,
-        rank_tier: "emerald_plus",
+        rank_tier: filters.rank_tier,
       })
         .then((result) => { if (!cancelled) startTransition(() => setBuildRecommendation(result)); })
         .catch((err: unknown) => { if (!cancelled) console.error("[build-recommend] failed:", err); })
@@ -723,21 +711,17 @@ export default function App() {
       return;
     }
     if (!runeRecommendations) return;
-    const page = runeRecommendations.rune_pages.find((p) => p.keystone_id === keystoneId);
-    if (!page) return;
 
-    // Build a minimal perk array: keystone + per_rune_stats sorted by pick_rate for that tree
-    // For now, just use the keystone since we don't have full page data
-    // The LCU apply will use what we have from the rune stats
+    const runePage = buildFullRunePage(
+      keystoneId,
+      runeRecommendations.per_rune_stats,
+      runeLookup,
+      playerRunes?.selected_perk_ids,
+    );
+
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("apply_runes", {
-        request: {
-          primary_style_id: 0, // Will be filled from DDragon
-          sub_style_id: 0,
-          selected_perk_ids: [keystoneId],
-        },
-      });
+      await invoke("apply_runes", { request: runePage });
       setToastMessage({ text: "Runes applied successfully!", tone: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

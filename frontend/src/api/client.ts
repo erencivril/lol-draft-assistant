@@ -14,6 +14,8 @@ export type ChampionCatalogItem = {
   image_url: string;
   roles: string[];
   patch: string;
+  primary_role: string | null;
+  role_hints: Array<{ role: string; weight: number; games: number }>;
 };
 
 export type RecommendSlotPayload = {
@@ -26,18 +28,9 @@ export type RecommendSlotPayload = {
 export type RecommendPayload = {
   region: string;
   rank_tier: string;
-  role?: string;
   target_cell_id: number;
   enemy_slots: RecommendSlotPayload[];
   ally_slots: RecommendSlotPayload[];
-  enemy_picks?: Array<{
-    champion_id: number;
-    role?: string | null;
-  }>;
-  ally_picks?: Array<{
-    champion_id: number;
-    role?: string | null;
-  }>;
   bans: number[];
 };
 

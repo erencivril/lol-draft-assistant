@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -12,6 +12,13 @@ from app.domain.settings import UserSettings
 
 
 @dataclass(slots=True)
+class RoleHint:
+    role: str
+    weight: float
+    games: int
+
+
+@dataclass(slots=True)
 class ChampionRecord:
     champion_id: int
     key: str
@@ -19,6 +26,8 @@ class ChampionRecord:
     image_url: str
     roles: list[str]
     patch: str
+    primary_role: str | None = None
+    role_hints: list[RoleHint] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -203,6 +212,16 @@ class DatabaseRepository:
             column_name="normalised_delta",
             column_sql="REAL NOT NULL DEFAULT 0",
         )
+        await self._ensure_column(
+            table_name="champions",
+            column_name="primary_role",
+            column_sql="TEXT",
+        )
+        await self._ensure_column(
+            table_name="champions",
+            column_name="role_hints_json",
+            column_sql="TEXT NOT NULL DEFAULT '[]'",
+        )
 
     async def _ensure_column(self, *, table_name: str, column_name: str, column_sql: str) -> None:
         cursor = await self.connection.execute(f"PRAGMA table_info({table_name})")
@@ -250,8 +269,8 @@ class DatabaseRepository:
     async def upsert_champions(self, records: list[ChampionRecord]) -> None:
         await self.connection.executemany(
             """
-            INSERT INTO champions (id, key, name, image_url, roles_json, patch, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO champions (id, key, name, image_url, roles_json, primary_role, role_hints_json, patch, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 key = excluded.key,
                 name = excluded.name,
@@ -259,6 +278,11 @@ class DatabaseRepository:
                 roles_json = CASE
                     WHEN excluded.roles_json = '[]' THEN champions.roles_json
                     ELSE excluded.roles_json
+                END,
+                primary_role = COALESCE(excluded.primary_role, champions.primary_role),
+                role_hints_json = CASE
+                    WHEN excluded.role_hints_json = '[]' THEN champions.role_hints_json
+                    ELSE excluded.role_hints_json
                 END,
                 patch = excluded.patch,
                 updated_at = excluded.updated_at
@@ -270,6 +294,8 @@ class DatabaseRepository:
                     record.name,
                     record.image_url,
                     json.dumps(record.roles),
+                    record.primary_role,
+                    json.dumps([{"role": h.role, "weight": h.weight, "games": h.games} for h in record.role_hints]),
                     record.patch,
                     datetime.now(UTC).isoformat(),
                 )
@@ -289,6 +315,11 @@ class DatabaseRepository:
                 image_url=row["image_url"],
                 roles=json.loads(row["roles_json"]),
                 patch=row["patch"],
+                primary_role=row["primary_role"],
+                role_hints=[
+                    RoleHint(**h)
+                    for h in json.loads(row["role_hints_json"] or "[]")
+                ],
             )
             for row in rows
         }
