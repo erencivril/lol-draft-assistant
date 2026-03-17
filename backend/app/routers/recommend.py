@@ -226,12 +226,22 @@ class BuildRecommendRequest(BaseModel):
         return normalize_role_name(v) or v
 
 
+class MatchupSummaryOut(BaseModel):
+    opponent_name: str
+    opponent_id: int
+    opponent_role: str
+    overall_win_rate: float
+    total_games: int
+    position_weight: float
+
+
 class ItemMatchupOut(BaseModel):
     opponent_name: str
     opponent_id: int
     opponent_role: str
     win_rate: float
     games: int
+    position_weight: float
 
 
 class ItemOut(BaseModel):
@@ -251,8 +261,9 @@ class BuildSlotOut(BaseModel):
 class BuildRecommendResponse(BaseModel):
     slots: list[BuildSlotOut]
     skill_order: str | None = None
-    keystone_filtered: bool
+    keystone_used: int | None = None
     fallback_used: bool
+    matchup_summaries: list[MatchupSummaryOut] = []
 
 
 async def _prepare_enemies(
@@ -342,7 +353,7 @@ async def recommend_build_endpoint(
     champ = champion_lookup.get(payload.champion_id)
     if champ is None:
         return BuildRecommendResponse(
-            slots=[], skill_order=None, keystone_filtered=False, fallback_used=True,
+            slots=[], skill_order=None, keystone_used=None, fallback_used=True,
         )
 
     enemies = await _prepare_enemies(payload.enemy_slots, champion_lookup)
@@ -358,49 +369,46 @@ async def recommend_build_endpoint(
         tier=payload.rank_tier,
     )
 
+    def _item_out(item):
+        return ItemOut(
+            item_id=item.item_id,
+            weighted_score=item.weighted_score,
+            total_games=item.total_games,
+            avg_win_rate=item.avg_win_rate,
+            matchup_contributions=[
+                ItemMatchupOut(
+                    opponent_name=c.opponent_name,
+                    opponent_id=c.opponent_id,
+                    opponent_role=c.opponent_role,
+                    win_rate=c.win_rate,
+                    games=c.games,
+                    position_weight=c.position_weight,
+                )
+                for c in item.matchup_contributions
+            ],
+        )
+
     return BuildRecommendResponse(
         slots=[
             BuildSlotOut(
                 slot_name=s.slot_name,
-                primary=ItemOut(
-                    item_id=s.primary.item_id,
-                    weighted_score=s.primary.weighted_score,
-                    total_games=s.primary.total_games,
-                    avg_win_rate=s.primary.avg_win_rate,
-                    matchup_contributions=[
-                        ItemMatchupOut(
-                            opponent_name=c.opponent_name,
-                            opponent_id=c.opponent_id,
-                            opponent_role=c.opponent_role,
-                            win_rate=c.win_rate,
-                            games=c.games,
-                        )
-                        for c in s.primary.matchup_contributions
-                    ],
-                ) if s.primary else None,
-                alternatives=[
-                    ItemOut(
-                        item_id=a.item_id,
-                        weighted_score=a.weighted_score,
-                        total_games=a.total_games,
-                        avg_win_rate=a.avg_win_rate,
-                        matchup_contributions=[
-                            ItemMatchupOut(
-                                opponent_name=c.opponent_name,
-                                opponent_id=c.opponent_id,
-                                opponent_role=c.opponent_role,
-                                win_rate=c.win_rate,
-                                games=c.games,
-                            )
-                            for c in a.matchup_contributions
-                        ],
-                    )
-                    for a in s.alternatives
-                ],
+                primary=_item_out(s.primary) if s.primary else None,
+                alternatives=[_item_out(a) for a in s.alternatives],
             )
             for s in result.slots
         ],
         skill_order=result.skill_order,
-        keystone_filtered=result.keystone_filtered,
+        keystone_used=result.keystone_used,
         fallback_used=result.fallback_used,
+        matchup_summaries=[
+            MatchupSummaryOut(
+                opponent_name=m.opponent_name,
+                opponent_id=m.opponent_id,
+                opponent_role=m.opponent_role,
+                overall_win_rate=m.overall_win_rate,
+                total_games=m.total_games,
+                position_weight=m.position_weight,
+            )
+            for m in result.matchup_summaries
+        ],
     )

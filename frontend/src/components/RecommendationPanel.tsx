@@ -184,6 +184,12 @@ function RecommendationCard({ item, rank, isBan }: { item: RecommendationItem; r
 
 type TabKey = "picks" | "bans" | "runes" | "build";
 
+type ChampionInfo = {
+  champion_id: number;
+  name: string;
+  image_url: string;
+};
+
 type RecommendationTabsProps = {
   picks: RecommendationItem[];
   bans: RecommendationItem[];
@@ -199,6 +205,7 @@ type RecommendationTabsProps = {
   showRuneTab: boolean;
   showBuildTab: boolean;
   onApplyRunes?: (keystoneId: number) => void;
+  championLookup?: Map<number, ChampionInfo>;
 };
 
 function TrustDots({ bundle }: { bundle: RecommendationBundle }) {
@@ -242,6 +249,7 @@ export function RecommendationPanel({
   showRuneTab,
   showBuildTab,
   onApplyRunes,
+  championLookup,
 }: RecommendationTabsProps) {
   const [activeTab, setActiveTab] = useState<TabKey>(defaultTab);
   const items = activeTab === "picks" ? picks : bans;
@@ -290,6 +298,8 @@ export function RecommendationPanel({
           data={buildData}
           itemLookup={itemLookup}
           loading={buildLoading}
+          championLookup={championLookup}
+          runeLookup={runeLookup}
         />
       ) : (
         <div className="flex flex-col gap-2">

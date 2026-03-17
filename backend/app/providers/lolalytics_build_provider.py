@@ -399,8 +399,10 @@ class LolalyticsBuildsProvider:
         self._semaphore = asyncio.Semaphore(settings.scrape_page_concurrency)
 
     def _cache_key(self, champion_slug: str, role: str,
-                   opponent_slug: str | None, opponent_role: str | None) -> str:
-        return f"{champion_slug}:{role}:{opponent_slug or ''}:{opponent_role or ''}"
+                   opponent_slug: str | None, opponent_role: str | None,
+                   keystone_id: int | None = None) -> str:
+        ks = str(keystone_id) if keystone_id and not opponent_slug else ""
+        return f"{champion_slug}:{role}:{opponent_slug or ''}:{opponent_role or ''}:{ks}"
 
     def _get_cached(self, key: str) -> MatchupBuildData | None:
         entry = self._cache.get(key)
@@ -426,19 +428,22 @@ class LolalyticsBuildsProvider:
         opponent_slug: str | None = None,
         opponent_id: int | None = None,
         opponent_role: str | None = None,
+        keystone_id: int | None = None,
         tier: str = "emerald_plus",
     ) -> MatchupBuildData | None:
         """Fetch build/rune data for a champion, optionally vs a specific opponent.
 
         Returns cached data if available, otherwise fetches from lolalytics.
+        keystone_id is only used for general build pages (vs pages don't support it).
         """
-        cache_key = self._cache_key(champion_slug, role, opponent_slug, opponent_role)
+        cache_key = self._cache_key(champion_slug, role, opponent_slug, opponent_role, keystone_id)
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
         normalized_tier = _normalize_tier(tier)
         if opponent_slug and opponent_role:
+            # VS page — keystone filter not supported
             url = (
                 f"{LOLALYTICS_BUILD_BASE}/{champion_slug}/vs/{opponent_slug}"
                 f"/build/q-data.json?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
@@ -448,13 +453,15 @@ class LolalyticsBuildsProvider:
                 f"/build/?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
             )
         else:
+            # General page — keystone filter supported
+            keystone_param = f"&keystone={keystone_id}" if keystone_id else ""
             url = (
                 f"{LOLALYTICS_BUILD_BASE}/{champion_slug}"
-                f"/build/q-data.json?lane={role}&tier={normalized_tier}"
+                f"/build/q-data.json?lane={role}&tier={normalized_tier}{keystone_param}"
             )
             referer = (
                 f"https://lolalytics.com/lol/{champion_slug}"
-                f"/build/?lane={role}&tier={normalized_tier}"
+                f"/build/?lane={role}&tier={normalized_tier}{keystone_param}"
             )
 
         async with self._semaphore:
@@ -517,13 +524,15 @@ class LolalyticsBuildsProvider:
         champion_slug: str,
         champion_id: int,
         role: str,
+        keystone_id: int | None = None,
         tier: str = "emerald_plus",
     ) -> MatchupBuildData | None:
-        """Fetch general (non-matchup) build data as fallback."""
+        """Fetch general (non-matchup) build data, optionally filtered by keystone."""
         return await self.fetch_build_data(
             champion_slug=champion_slug,
             champion_id=champion_id,
             role=role,
+            keystone_id=keystone_id,
             tier=tier,
         )
 

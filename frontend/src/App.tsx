@@ -988,6 +988,7 @@ export default function App() {
               showRuneTab={localSlotForRunes != null}
               showBuildTab={localSlotForRunes != null && effectiveDraftState.enemy_team_picks.some((s) => s.champion_id > 0)}
               onApplyRunes={handleApplyRunes}
+              championLookup={championLookup}
             />
           </section>
         </div>

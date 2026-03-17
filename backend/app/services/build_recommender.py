@@ -11,14 +11,15 @@ from app.providers.lolalytics_build_provider import (
     LolalyticsBuildsProvider,
     MatchupBuildData,
 )
-from app.services.rune_recommender import KEYSTONE_IDS
-
 logger = logging.getLogger("lda.services.build_recommender")
 
 # Position weights for build decisions (lane opponent matters most)
 LANE_OPPONENT_WEIGHT = 4.0
 JUNGLE_WEIGHT = 2.0
 DEFAULT_WEIGHT = 1.0
+
+# Keystone coherence: items that appear in keystone-filtered builds get a small bonus
+KEYSTONE_COHERENCE_BONUS = 1.15
 
 MIN_GAMES_PER_MATCHUP = 20
 MIN_MATCHUPS_FOR_AGGREGATION = 1
@@ -54,6 +55,18 @@ class ItemMatchupContribution:
     opponent_role: str
     win_rate: float
     games: int
+    position_weight: float
+
+
+@dataclass(slots=True)
+class MatchupSummary:
+    """Top-level summary of a single enemy matchup used in this recommendation."""
+    opponent_name: str
+    opponent_id: int
+    opponent_role: str
+    overall_win_rate: float
+    total_games: int
+    position_weight: float
 
 
 @dataclass(slots=True)
@@ -68,8 +81,9 @@ class BuildSlot:
 class BuildRecommendationResult:
     slots: list[BuildSlot]
     skill_order: str | None
-    keystone_filtered: bool
+    keystone_used: int | None
     fallback_used: bool
+    matchup_summaries: list[MatchupSummary] = field(default_factory=list)
 
 
 def _position_weight(player_role: str, opponent_role: str) -> float:
@@ -89,6 +103,7 @@ def _aggregate_slot_items(
     player_role: str,
     champion_lookup: dict[int, ChampionRecord],
     exclude_ids: frozenset[int] | None = None,
+    keystone_item_set: frozenset[int] | None = None,
 ) -> list[ItemRecommendation]:
     """Aggregate item stats across matchups for a given build slot."""
     # item_id -> {score, weight_sum, games, contributions}
@@ -112,6 +127,10 @@ def _aggregate_slot_items(
             games_factor = min(1.0, item.games / 100)
             score = item.win_rate * weight * games_factor * item.pick_rate
 
+            # Keystone coherence bonus
+            if keystone_item_set and iid in keystone_item_set:
+                score *= KEYSTONE_COHERENCE_BONUS
+
             if iid not in item_scores:
                 item_scores[iid] = {
                     "score": 0.0,
@@ -132,6 +151,7 @@ def _aggregate_slot_items(
                     opponent_role=enemy_info.get("role", ""),
                     win_rate=item.win_rate,
                     games=item.games,
+                    position_weight=weight,
                 ))
 
     recommendations: list[ItemRecommendation] = []
@@ -158,12 +178,14 @@ def _build_slot(
     player_role: str,
     champion_lookup: dict[int, ChampionRecord],
     already_picked: set[int],
-    max_alternatives: int = 2,
+    max_alternatives: int = 3,
+    keystone_item_set: frozenset[int] | None = None,
 ) -> BuildSlot:
     """Build a single slot recommendation, excluding already-picked items."""
     items = _aggregate_slot_items(
         matchup_pairs, slot_attr, player_role, champion_lookup,
         exclude_ids=frozenset(already_picked),
+        keystone_item_set=keystone_item_set,
     )
     slot = BuildSlot(slot_name=name)
     for item in items:
@@ -209,6 +231,28 @@ async def recommend_build(
         tier=tier,
     )
 
+    # Fetch keystone-filtered general build for coherence scoring
+    keystone_build = None
+    if keystone_id:
+        keystone_build = await provider.fetch_general_build(
+            champion_slug=champion_slug,
+            champion_id=champion_id,
+            role=role,
+            keystone_id=keystone_id,
+            tier=tier,
+        )
+
+    # Build keystone-coherent item set from keystone-filtered build
+    keystone_item_set: frozenset[int] | None = None
+    if keystone_build:
+        ks_items: set[int] = set()
+        for slot_attr in ("boots", "start_items", "item1", "item2", "item3", "item4", "item5"):
+            items = getattr(keystone_build, slot_attr, [])
+            for item in items[:5]:
+                ks_items.add(item.item_id)
+        if ks_items:
+            keystone_item_set = frozenset(ks_items)
+
     matchup_pairs: list[tuple[dict, MatchupBuildData]] = []
     for enemy, result in zip(enemies, matchup_results):
         if result is not None and result.total_games >= MIN_GAMES_PER_MATCHUP:
@@ -222,8 +266,28 @@ async def recommend_build(
 
     if not matchup_pairs:
         return BuildRecommendationResult(
-            slots=[], skill_order=None, keystone_filtered=False, fallback_used=True,
+            slots=[], skill_order=None, keystone_used=None, fallback_used=True,
         )
+
+    # Build matchup summaries for UI
+    matchup_summaries: list[MatchupSummary] = []
+    for enemy_info, build_data in matchup_pairs:
+        opp_id = enemy_info.get("champion_id", 0)
+        if not opp_id:
+            continue
+        opp_name = ""
+        if opp_id in champion_lookup:
+            opp_name = champion_lookup[opp_id].name
+        opp_role = enemy_info.get("role", "")
+        weight = _position_weight(role, opp_role)
+        matchup_summaries.append(MatchupSummary(
+            opponent_name=opp_name,
+            opponent_id=opp_id,
+            opponent_role=opp_role,
+            overall_win_rate=build_data.overall_win_rate,
+            total_games=build_data.total_games,
+            position_weight=weight,
+        ))
 
     # Build each slot, tracking picked items to avoid duplicates
     already_picked: set[int] = set()
@@ -231,7 +295,8 @@ async def recommend_build(
 
     # Starter items
     starter_slot = _build_slot(
-        "starter", matchup_pairs, "start_items", role, champion_lookup, already_picked,
+        "starter", matchup_pairs, "start_items", role, champion_lookup,
+        already_picked, keystone_item_set=keystone_item_set,
     )
     slots.append(starter_slot)
     if starter_slot.primary:
@@ -239,7 +304,8 @@ async def recommend_build(
 
     # Boots
     boots_slot = _build_slot(
-        "boots", matchup_pairs, "boots", role, champion_lookup, already_picked,
+        "boots", matchup_pairs, "boots", role, champion_lookup,
+        already_picked, keystone_item_set=keystone_item_set,
     )
     slots.append(boots_slot)
     if boots_slot.primary:
@@ -249,7 +315,8 @@ async def recommend_build(
     for i in range(1, 6):
         slot_attr = f"item{i}"
         item_slot = _build_slot(
-            slot_attr, matchup_pairs, slot_attr, role, champion_lookup, already_picked,
+            slot_attr, matchup_pairs, slot_attr, role, champion_lookup,
+            already_picked, keystone_item_set=keystone_item_set,
         )
         slots.append(item_slot)
         if item_slot.primary:
@@ -267,6 +334,7 @@ async def recommend_build(
     return BuildRecommendationResult(
         slots=slots,
         skill_order=skill_order,
-        keystone_filtered=keystone_id is not None,
+        keystone_used=keystone_id if keystone_build else None,
         fallback_used=fallback_used,
+        matchup_summaries=matchup_summaries,
     )

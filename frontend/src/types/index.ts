@@ -220,12 +220,22 @@ export type RuneRecommendResponse = {
   fallback_used: boolean;
 };
 
+export type MatchupSummary = {
+  opponent_name: string;
+  opponent_id: number;
+  opponent_role: string;
+  overall_win_rate: number;
+  total_games: number;
+  position_weight: number;
+};
+
 export type ItemMatchupContribution = {
   opponent_name: string;
   opponent_id: number;
   opponent_role: string;
   win_rate: number;
   games: number;
+  position_weight: number;
 };
 
 export type ItemRecommendation = {
@@ -245,8 +255,9 @@ export type BuildSlot = {
 export type BuildRecommendResponse = {
   slots: BuildSlot[];
   skill_order: string | null;
-  keystone_filtered: boolean;
+  keystone_used: number | null;
   fallback_used: boolean;
+  matchup_summaries: MatchupSummary[];
 };
 
 export type RunePagePayload = {
