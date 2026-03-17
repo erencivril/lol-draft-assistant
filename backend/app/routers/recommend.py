@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi import APIRouter, Request
 
@@ -7,6 +9,11 @@ from app.domain.draft import DraftState, TeamSlot
 from app.domain.recommendation import RecommendationBundle
 from app.domain.roles import normalize_role_name
 from app.domain.settings import ResolvedFilters
+from app.providers.lolalytics_build_provider import LolalyticsBuildsProvider
+from app.services.rune_recommender import recommend_runes
+from app.services.build_recommender import recommend_build
+
+logger = logging.getLogger("lda.routers.recommend")
 
 router = APIRouter(prefix="/api", tags=["recommend"])
 
@@ -34,8 +41,8 @@ class RecommendRequest(BaseModel):
     @field_validator("target_cell_id")
     @classmethod
     def validate_target_cell_id(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("target_cell_id must be a positive cell id")
+        if value < 0:
+            raise ValueError("target_cell_id must be a non-negative cell id")
         return value
 
     @model_validator(mode="after")
@@ -133,3 +140,251 @@ async def get_champions(request: Request) -> dict[int, ChampionLookupItem]:
         )
         for champion_id, champion in sorted(service.champion_lookup.items(), key=lambda item: item[1].name)
     }
+
+
+# ---------------------------------------------------------------------------
+# Rune & Build recommendation endpoints
+# ---------------------------------------------------------------------------
+
+class EnemySlotInput(BaseModel):
+    champion_id: int
+    role: str
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize(cls, v: str) -> str:
+        return normalize_role_name(v) or v
+
+
+class RuneRecommendRequest(BaseModel):
+    champion_id: int
+    role: str
+    enemy_slots: list[EnemySlotInput] = Field(default_factory=list)
+    rank_tier: str = "emerald_plus"
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, v: str) -> str:
+        return normalize_role_name(v) or v
+
+
+class RuneMatchupDetail(BaseModel):
+    opponent_name: str
+    opponent_id: int
+    opponent_role: str
+    win_rate: float
+    games: int
+
+
+class RunePageOut(BaseModel):
+    keystone_id: int
+    weighted_score: float
+    total_games: int
+    avg_win_rate: float
+    matchup_details: list[RuneMatchupDetail]
+
+
+class RuneStatOut(BaseModel):
+    rune_id: int
+    weighted_win_rate: float
+    total_games: int
+    pick_rate: float
+
+
+class RuneRecommendResponse(BaseModel):
+    rune_pages: list[RunePageOut]
+    per_rune_stats: list[RuneStatOut]
+    fallback_used: bool
+
+
+class BuildRecommendRequest(BaseModel):
+    champion_id: int
+    role: str
+    keystone_id: int | None = None
+    enemy_slots: list[EnemySlotInput] = Field(default_factory=list)
+    rank_tier: str = "emerald_plus"
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, v: str) -> str:
+        return normalize_role_name(v) or v
+
+
+class ItemMatchupOut(BaseModel):
+    opponent_name: str
+    opponent_id: int
+    opponent_role: str
+    win_rate: float
+    games: int
+
+
+class ItemOut(BaseModel):
+    item_id: int
+    weighted_score: float
+    total_games: int
+    avg_win_rate: float
+    matchup_contributions: list[ItemMatchupOut]
+
+
+class BuildSlotOut(BaseModel):
+    slot_name: str
+    primary: ItemOut | None = None
+    alternatives: list[ItemOut]
+
+
+class BuildRecommendResponse(BaseModel):
+    slots: list[BuildSlotOut]
+    skill_order: str | None = None
+    keystone_filtered: bool
+    fallback_used: bool
+
+
+async def _prepare_enemies(
+    enemy_slots: list[EnemySlotInput],
+    champion_lookup: dict,
+) -> list[dict]:
+    """Convert enemy slot inputs to the dict format expected by providers."""
+    enemies: list[dict] = []
+    for slot in enemy_slots:
+        champ = champion_lookup.get(slot.champion_id)
+        if champ is None:
+            logger.warning("Unknown champion_id %d in enemy slots", slot.champion_id)
+            continue
+        enemies.append({
+            "slug": champ.key.lower(),
+            "champion_id": slot.champion_id,
+            "role": slot.role,
+        })
+    return enemies
+
+
+@router.post("/recommend/runes", response_model=RuneRecommendResponse)
+async def recommend_runes_endpoint(
+    payload: RuneRecommendRequest,
+    request: Request,
+) -> RuneRecommendResponse:
+    provider: LolalyticsBuildsProvider = request.app.state.builds_provider
+    champion_lookup = await request.app.state.repository.get_champion_lookup()
+
+    champ = champion_lookup.get(payload.champion_id)
+    if champ is None:
+        return RuneRecommendResponse(rune_pages=[], per_rune_stats=[], fallback_used=True)
+
+    enemies = await _prepare_enemies(payload.enemy_slots, champion_lookup)
+
+    result = await recommend_runes(
+        provider=provider,
+        champion_slug=champ.key.lower(),
+        champion_id=payload.champion_id,
+        role=payload.role,
+        enemies=enemies,
+        champion_lookup=champion_lookup,
+        tier=payload.rank_tier,
+    )
+
+    return RuneRecommendResponse(
+        rune_pages=[
+            RunePageOut(
+                keystone_id=p.keystone_id,
+                weighted_score=p.weighted_score,
+                total_games=p.total_games,
+                avg_win_rate=p.avg_win_rate,
+                matchup_details=[
+                    RuneMatchupDetail(
+                        opponent_name=d.opponent_name,
+                        opponent_id=d.opponent_id,
+                        opponent_role=d.opponent_role,
+                        win_rate=d.win_rate,
+                        games=d.games,
+                    )
+                    for d in p.matchup_details
+                ],
+            )
+            for p in result.rune_pages
+        ],
+        per_rune_stats=[
+            RuneStatOut(
+                rune_id=s.rune_id,
+                weighted_win_rate=s.weighted_win_rate,
+                total_games=s.total_games,
+                pick_rate=s.pick_rate,
+            )
+            for s in result.per_rune_stats
+        ],
+        fallback_used=result.fallback_used,
+    )
+
+
+@router.post("/recommend/build", response_model=BuildRecommendResponse)
+async def recommend_build_endpoint(
+    payload: BuildRecommendRequest,
+    request: Request,
+) -> BuildRecommendResponse:
+    provider: LolalyticsBuildsProvider = request.app.state.builds_provider
+    champion_lookup = await request.app.state.repository.get_champion_lookup()
+
+    champ = champion_lookup.get(payload.champion_id)
+    if champ is None:
+        return BuildRecommendResponse(
+            slots=[], skill_order=None, keystone_filtered=False, fallback_used=True,
+        )
+
+    enemies = await _prepare_enemies(payload.enemy_slots, champion_lookup)
+
+    result = await recommend_build(
+        provider=provider,
+        champion_slug=champ.key.lower(),
+        champion_id=payload.champion_id,
+        role=payload.role,
+        keystone_id=payload.keystone_id,
+        enemies=enemies,
+        champion_lookup=champion_lookup,
+        tier=payload.rank_tier,
+    )
+
+    return BuildRecommendResponse(
+        slots=[
+            BuildSlotOut(
+                slot_name=s.slot_name,
+                primary=ItemOut(
+                    item_id=s.primary.item_id,
+                    weighted_score=s.primary.weighted_score,
+                    total_games=s.primary.total_games,
+                    avg_win_rate=s.primary.avg_win_rate,
+                    matchup_contributions=[
+                        ItemMatchupOut(
+                            opponent_name=c.opponent_name,
+                            opponent_id=c.opponent_id,
+                            opponent_role=c.opponent_role,
+                            win_rate=c.win_rate,
+                            games=c.games,
+                        )
+                        for c in s.primary.matchup_contributions
+                    ],
+                ) if s.primary else None,
+                alternatives=[
+                    ItemOut(
+                        item_id=a.item_id,
+                        weighted_score=a.weighted_score,
+                        total_games=a.total_games,
+                        avg_win_rate=a.avg_win_rate,
+                        matchup_contributions=[
+                            ItemMatchupOut(
+                                opponent_name=c.opponent_name,
+                                opponent_id=c.opponent_id,
+                                opponent_role=c.opponent_role,
+                                win_rate=c.win_rate,
+                                games=c.games,
+                            )
+                            for c in a.matchup_contributions
+                        ],
+                    )
+                    for a in s.alternatives
+                ],
+            )
+            for s in result.slots
+        ],
+        skill_order=result.skill_order,
+        keystone_filtered=result.keystone_filtered,
+        fallback_used=result.fallback_used,
+    )

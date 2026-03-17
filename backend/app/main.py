@@ -15,8 +15,10 @@ from app.domain.draft import DraftState
 from app.domain.settings import ResolvedFilters
 from app.logging_config import setup_logging
 from app.routers import admin, bridge, data, draft, recommend, settings as settings_router, status
+from app.providers.lolalytics_build_provider import LolalyticsBuildsProvider
 from app.services.champion_sync import ChampionSyncService
 from app.services.draft_state_builder import DraftStateBuilder
+from app.services.item_rune_sync import ItemRuneSyncService
 from app.services.lcu_connector import LcuConnector
 from app.services.recommendation_service import RecommendationService
 from app.services.scheduler import SchedulerService
@@ -62,6 +64,8 @@ async def lifespan(app: FastAPI):
     recommendation_service = RecommendationService(recommendation_repository)
     champion_sync_service = ChampionSyncService(settings, repository)
     orchestrator = ScraperOrchestrator(settings, repository, champion_sync_service, recommendation_service)
+    builds_provider = LolalyticsBuildsProvider(settings)
+    item_rune_sync = ItemRuneSyncService(settings)
     draft_builder = DraftStateBuilder()
     lcu_connector = LcuConnector(settings, draft_builder)
     warm_indexes_task = None
@@ -145,6 +149,8 @@ async def lifespan(app: FastAPI):
     app.state.ws_manager = ws_manager
     app.state.recommendation_service = recommendation_service
     app.state.orchestrator = orchestrator
+    app.state.builds_provider = builds_provider
+    app.state.item_rune_sync = item_rune_sync
     app.state.lcu_connector = lcu_connector
     app.state.resolve_filters_for = resolve_filters_for
 
@@ -172,6 +178,11 @@ async def lifespan(app: FastAPI):
         await lcu_connector.start(on_lcu_update)
     logger.info("App startup: starting scheduler")
     scheduler.start()
+    try:
+        logger.info("App startup: syncing item/rune definitions from DDragon")
+        await item_rune_sync.sync()
+    except Exception:
+        logger.exception("App startup: failed to sync item/rune definitions (non-fatal)")
     logger.info("App startup complete")
 
     try:

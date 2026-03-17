@@ -47,15 +47,13 @@ function normalizeChampionImageUrl(url?: string | null) {
 }
 
 function roleLabel(role?: string | null) {
-  return role ? role.charAt(0).toUpperCase() + role.slice(1) : "Auto";
+  return role ? role.charAt(0).toUpperCase() + role.slice(1) : "—";
 }
 
 function roleSourceLabel(slot: TeamSlot) {
-  if (slot.role_source === "inferred") {
-    return "AUTO";
-  }
-
-  return slot.role_source === "manual" ? "MANUAL" : slot.role_source.toUpperCase();
+  if (slot.role_source === "inferred") return "AUTO";
+  if (slot.role_source === "manual") return "MANUAL";
+  return "";
 }
 
 function SlotCard({
@@ -169,9 +167,12 @@ function SlotCard({
         <select
           aria-label={`${title} role`}
           className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
-          value={slot.effective_role ?? slot.assigned_role ?? roleOptions[0].value}
+          value={slot.effective_role ?? slot.assigned_role ?? ""}
           onChange={(event) => onRoleChange(event.target.value)}
         >
+          {!(slot.effective_role ?? slot.assigned_role) && (
+            <option value="" disabled hidden>—</option>
+          )}
           {roleOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -183,17 +184,7 @@ function SlotCard({
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
         <span>{roleLabel(slot.effective_role ?? slot.assigned_role)}</span>
         <div className="flex items-center gap-3">
-          {slot.role_source === "manual" ? (
-            <button
-              type="button"
-              className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300 transition-colors hover:border-amber-400/50 hover:text-amber-200"
-              onClick={() => onRoleChange("")}
-            >
-              Manual — reset
-            </button>
-          ) : (
-            <span>{roleSourceLabel(slot)}</span>
-          )}
+          <span>{roleSourceLabel(slot)}</span>
           {onSelectTarget ? (
             <button
               type="button"

@@ -3,12 +3,12 @@ from __future__ import annotations
 import pytest
 
 from app.config import Settings
-from app.providers.lolalytics_provider import LolalyticsBrowserSession
+from app.providers.lolalytics_provider import LolalyticsHttpSession
 
 
 @pytest.mark.asyncio
 async def test_with_retry_succeeds_on_second_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = LolalyticsBrowserSession(Settings())
+    session = LolalyticsHttpSession(Settings())
     attempts = 0
     waits: list[int] = []
 
@@ -33,7 +33,7 @@ async def test_with_retry_succeeds_on_second_attempt(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_with_retry_raises_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = LolalyticsBrowserSession(Settings())
+    session = LolalyticsHttpSession(Settings())
     attempts = 0
 
     async def operation() -> None:

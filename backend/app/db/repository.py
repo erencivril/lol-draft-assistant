@@ -33,6 +33,7 @@ class TierStatRecord:
     ban_rate: float = 0.0
     tier_grade: str = "B"
     pbi: float = 0.0
+    lane_rate: float = 0.0
     games: int = 0
     scope_generation_id: str | None = None
     patch: str = ""
@@ -193,6 +194,11 @@ class DatabaseRepository:
             column_sql="TEXT",
         )
         await self._ensure_column(
+            table_name="tier_stats",
+            column_name="lane_rate",
+            column_sql="REAL NOT NULL DEFAULT 0",
+        )
+        await self._ensure_column(
             table_name="synergies",
             column_name="normalised_delta",
             column_sql="REAL NOT NULL DEFAULT 0",
@@ -250,7 +256,10 @@ class DatabaseRepository:
                 key = excluded.key,
                 name = excluded.name,
                 image_url = excluded.image_url,
-                roles_json = excluded.roles_json,
+                roles_json = CASE
+                    WHEN excluded.roles_json = '[]' THEN champions.roles_json
+                    ELSE excluded.roles_json
+                END,
                 patch = excluded.patch,
                 updated_at = excluded.updated_at
             """,
@@ -293,8 +302,8 @@ class DatabaseRepository:
             """
             INSERT INTO tier_stats (
                 champion_id, region, rank_tier, role, tier_rank, win_rate, pick_rate,
-                ban_rate, tier_grade, pbi, games, scope_generation_id, patch, source, fetched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ban_rate, tier_grade, pbi, lane_rate, games, scope_generation_id, patch, source, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -308,6 +317,7 @@ class DatabaseRepository:
                     record.ban_rate,
                     record.tier_grade,
                     record.pbi,
+                    record.lane_rate,
                     record.games,
                     record.scope_generation_id,
                     record.patch,

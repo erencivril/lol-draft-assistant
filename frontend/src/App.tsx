@@ -2,9 +2,13 @@ import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   fetchChampions,
+  fetchItems,
+  fetchRunes,
   fetchStatus,
   getApiBaseUrl,
+  recommendBuild,
   recommendDraft,
+  recommendRunes,
   type ChampionCatalogItem,
   type RecommendPayload,
 } from "./api/client";
@@ -16,7 +20,17 @@ import { RecommendationPanel } from "./components/RecommendationPanel";
 import { inferDraftRoles } from "./lib/draftRoleInference";
 import { Toast } from "./components/Toast";
 import { roleOptions } from "./constants/filters";
-import type { DraftState, RecommendationBundle, StatusPayload, TeamSlot } from "./types";
+import type {
+  BuildRecommendResponse,
+  DraftState,
+  ItemDefinition,
+  RecommendationBundle,
+  RuneDefinition,
+  RunePagePayload,
+  RuneRecommendResponse,
+  StatusPayload,
+  TeamSlot,
+} from "./types";
 
 type ToastState = {
   text: string;
@@ -26,7 +40,8 @@ type ToastState = {
 type LcuDraftUpdatePayload = {
   connected: boolean;
   status?: string;
-  draft_state?: DraftState | null;
+  draft_state?: (DraftState & { local_player_runes?: RunePagePayload | null }) | null;
+  gameflow_phase?: string | null;
 };
 
 type SlotOverride = {
@@ -87,7 +102,6 @@ function createBaseSlot(
   cellId: number,
   role: string | null,
   isLocalPlayer = false,
-  softDefault = false,
 ): TeamSlot {
   const normalizedRole = role && roleOrder.includes(role) ? role : null;
 
@@ -98,9 +112,9 @@ function createBaseSlot(
     champion_image_url: null,
     assigned_role: normalizedRole,
     effective_role: normalizedRole,
-    role_source: normalizedRole ? (softDefault ? "inferred" : "manual") : "unknown",
-    role_confidence: normalizedRole ? (softDefault ? 0.5 : 1) : 0,
-    role_candidates: normalizedRole ? [{ role: normalizedRole, confidence: softDefault ? 0.5 : 1 }] : [],
+    role_source: normalizedRole ? "manual" : "unknown",
+    role_confidence: normalizedRole ? 1 : 0,
+    role_candidates: normalizedRole ? [{ role: normalizedRole, confidence: 1 }] : [],
     is_local_player: isLocalPlayer,
   };
 }
@@ -117,7 +131,7 @@ function createManualDraftState(localRole: string): DraftState {
     current_actor_cell_id: localPlayerCellId,
     current_action_type: "pick",
     my_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 1, role, role === safeRole)),
-    enemy_team_picks: roleOrder.map((role, index) => createBaseSlot(index + 6, role, false, true)),
+    enemy_team_picks: roleOrder.map((_, index) => createBaseSlot(index + 6, null)),
     my_team_declared_roles: [safeRole],
     enemy_team_declared_roles: [],
     my_bans: [0, 0, 0, 0, 0],
@@ -241,7 +255,7 @@ function resolveRecommendTargetCellId(draftState: DraftState, targetCellId: numb
   if (localSlot) {
     return localSlot.cell_id;
   }
-  return draftState.my_team_picks[0]?.cell_id ?? 1;
+  return draftState.my_team_picks[0]?.cell_id ?? 0;
 }
 
 function applyLocalRoleOverride(draftState: DraftState, localRoleOverride: string | null): DraftState {
@@ -407,6 +421,14 @@ export default function App() {
     status: isTauriRuntime() ? "Waiting for League Client" : "Tauri runtime not detected",
     lastUpdatedAt: null,
   });
+  const [gameflowPhase, setGameflowPhase] = useState<string>("");
+  const [playerRunes, setPlayerRunes] = useState<RunePagePayload | null>(null);
+  const [runeRecommendations, setRuneRecommendations] = useState<RuneRecommendResponse | null>(null);
+  const [buildRecommendation, setBuildRecommendation] = useState<BuildRecommendResponse | null>(null);
+  const [runeLoading, setRuneLoading] = useState(false);
+  const [buildLoading, setBuildLoading] = useState(false);
+  const [runeLookup, setRuneLookup] = useState<Record<string, RuneDefinition>>({});
+  const [itemLookup, setItemLookup] = useState<Record<string, ItemDefinition>>({});
 
   const apiBaseUrl = getApiBaseUrl();
   const championLookup = useMemo(
@@ -426,20 +448,25 @@ export default function App() {
 
     const loadBootstrap = async () => {
       try {
-        const [nextStatus, nextChampions] = await Promise.all([fetchStatus(), fetchChampions()]);
+        const [nextStatus, nextChampions, nextItems, nextRunes] = await Promise.all([
+          fetchStatus(),
+          fetchChampions(),
+          fetchItems().catch(() => ({} as Record<string, ItemDefinition>)),
+          fetchRunes().catch(() => ({} as Record<string, RuneDefinition>)),
+        ]);
         if (cancelled) {
           return;
         }
         startTransition(() => {
           setStatus(nextStatus);
           setChampions(nextChampions);
+          setItemLookup(nextItems);
+          setRuneLookup(nextRunes);
+          setLoading(false);
         });
       } catch {
         if (!cancelled) {
           setToastMessage({ text: "Failed to reach the Hetzner backend.", tone: "error" });
-        }
-      } finally {
-        if (!cancelled) {
           setLoading(false);
         }
       }
@@ -483,7 +510,9 @@ export default function App() {
           if (!active) {
             return;
           }
-          const nextDraftState = event.payload.connected && event.payload.draft_state ? event.payload.draft_state : null;
+          const rawDraft = event.payload.connected && event.payload.draft_state ? event.payload.draft_state : null;
+          const nextPlayerRunes = rawDraft?.local_player_runes ?? null;
+          const nextDraftState = rawDraft;
           startTransition(() => {
             setLcuState({
               connected: event.payload.connected,
@@ -493,6 +522,10 @@ export default function App() {
               lastUpdatedAt: new Date().toISOString(),
             });
             setLcuDraftState(nextDraftState);
+            setGameflowPhase(event.payload.gameflow_phase ?? "");
+            if (nextPlayerRunes) {
+              setPlayerRunes(nextPlayerRunes);
+            }
           });
         });
       } catch (error) {
@@ -527,7 +560,17 @@ export default function App() {
     const inferredDraft = inferDraftRoles(draftWithLocalRole, championLookup, {
       enemyManualLockOrderByCellId: enemyRoleLockOrder,
     });
-    return hydrateDraftState(inferredDraft, championLookup);
+    const result = hydrateDraftState(inferredDraft, championLookup);
+    console.debug("[draft-inference]", {
+      championLookupSize: championLookup.size,
+      enemyRoles: result.enemy_team_picks.map((s) => ({
+        cellId: s.cell_id,
+        champId: s.champion_id,
+        role: s.effective_role,
+        source: s.role_source,
+      })),
+    });
+    return result;
   }, [
     banOverrides,
     championLookup,
@@ -566,10 +609,12 @@ export default function App() {
             });
           }
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (!cancelled) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error("[recommend] failed:", msg, recommendPayload);
             setRecommendations(emptyRecommendations);
-            setToastMessage({ text: "Recommendation request failed.", tone: "error" });
+            setToastMessage({ text: `Recommendation failed: ${msg}`, tone: "error" });
           }
         })
         .finally(() => {
@@ -585,6 +630,121 @@ export default function App() {
     };
   }, [recommendFingerprint, recommendPayload]);
 
+  // Rune recommendation: triggers when local player has locked a champion
+  const localSlotForRunes = useMemo(() => {
+    const local = findLocalPlayerSlot(effectiveDraftState);
+    if (!local || local.champion_id <= 0) return null;
+    return local;
+  }, [effectiveDraftState]);
+
+  const runeRequestFingerprint = useMemo(() => {
+    if (!localSlotForRunes) return "";
+    const enemies = effectiveDraftState.enemy_team_picks
+      .filter((s) => s.champion_id > 0)
+      .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+    return JSON.stringify({
+      champion_id: localSlotForRunes.champion_id,
+      role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
+      enemies,
+      rank_tier: "emerald_plus",
+    });
+  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks]);
+
+  useEffect(() => {
+    if (!localSlotForRunes || !runeRequestFingerprint) {
+      setRuneRecommendations(null);
+      return;
+    }
+    let cancelled = false;
+    const tid = window.setTimeout(() => {
+      setRuneLoading(true);
+      const enemies = effectiveDraftState.enemy_team_picks
+        .filter((s) => s.champion_id > 0)
+        .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+      void recommendRunes({
+        champion_id: localSlotForRunes.champion_id,
+        role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
+        enemy_slots: enemies,
+        rank_tier: "emerald_plus",
+      })
+        .then((result) => { if (!cancelled) startTransition(() => setRuneRecommendations(result)); })
+        .catch((err: unknown) => { if (!cancelled) console.error("[rune-recommend] failed:", err); })
+        .finally(() => { if (!cancelled) setRuneLoading(false); });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(tid); };
+  }, [runeRequestFingerprint, localSlotForRunes, effectiveDraftState.enemy_team_picks]);
+
+  // Build recommendation: triggers when game is in progress or when enemy team is fully drafted
+  const inGame = gameflowPhase === "InProgress" || gameflowPhase === "GameStart";
+  const buildRequestFingerprint = useMemo(() => {
+    if (!localSlotForRunes) return "";
+    const enemies = effectiveDraftState.enemy_team_picks
+      .filter((s) => s.champion_id > 0)
+      .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+    if (enemies.length === 0) return "";
+    return JSON.stringify({
+      champion_id: localSlotForRunes.champion_id,
+      role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
+      keystone_id: playerRunes?.keystone_id ?? null,
+      enemies,
+      rank_tier: "emerald_plus",
+    });
+  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id]);
+
+  useEffect(() => {
+    if (!buildRequestFingerprint || !localSlotForRunes) {
+      setBuildRecommendation(null);
+      return;
+    }
+    let cancelled = false;
+    const tid = window.setTimeout(() => {
+      setBuildLoading(true);
+      const enemies = effectiveDraftState.enemy_team_picks
+        .filter((s) => s.champion_id > 0)
+        .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+      void recommendBuild({
+        champion_id: localSlotForRunes.champion_id,
+        role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
+        keystone_id: playerRunes?.keystone_id ?? null,
+        enemy_slots: enemies,
+        rank_tier: "emerald_plus",
+      })
+        .then((result) => { if (!cancelled) startTransition(() => setBuildRecommendation(result)); })
+        .catch((err: unknown) => { if (!cancelled) console.error("[build-recommend] failed:", err); })
+        .finally(() => { if (!cancelled) setBuildLoading(false); });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(tid); };
+  }, [buildRequestFingerprint, localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id]);
+
+  // Apply runes via Tauri command
+  const handleApplyRunes = async (keystoneId: number) => {
+    if (!isTauriRuntime()) {
+      setToastMessage({ text: "Rune apply requires Tauri runtime", tone: "error" });
+      return;
+    }
+    if (!runeRecommendations) return;
+    const page = runeRecommendations.rune_pages.find((p) => p.keystone_id === keystoneId);
+    if (!page) return;
+
+    // Build a minimal perk array: keystone + per_rune_stats sorted by pick_rate for that tree
+    // For now, just use the keystone since we don't have full page data
+    // The LCU apply will use what we have from the rune stats
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("apply_runes", {
+        request: {
+          primary_style_id: 0, // Will be filled from DDragon
+          sub_style_id: 0,
+          selected_perk_ids: [keystoneId],
+        },
+      });
+      setToastMessage({ text: "Runes applied successfully!", tone: "success" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToastMessage({ text: `Failed to apply runes: ${msg}`, tone: "error" });
+    }
+  };
+
   const updateManualSlot = (team: "ally" | "enemy", cellId: number, updates: Partial<TeamSlot>) => {
     const field = team === "ally" ? "my_team_picks" : "enemy_team_picks";
     setManualDraftState((currentDraft) => ({
@@ -594,7 +754,7 @@ export default function App() {
   };
 
   const handleSlotChampionChange = (team: "ally" | "enemy", cellId: number, championId: number) => {
-    if (lcuState.connected) {
+    if (lcuState.connected && lcuDraftState) {
       const slotKey = `${team}:${cellId}`;
       setSlotOverrides((current) => ({
         ...current,
@@ -644,7 +804,7 @@ export default function App() {
       });
     }
 
-    if (lcuState.connected) {
+    if (lcuState.connected && lcuDraftState) {
       const slotKey = `${team}:${cellId}`;
       setSlotOverrides((current) => {
         const nextOverrides = { ...current };
@@ -691,25 +851,11 @@ export default function App() {
             if (role) {
               return { ...slot, ...createRoleSnapshot(role) };
             }
-            // Clearing: fall back to positional default instead of "Unknown"
-            const positionalRole = roleOrder[slot.cell_id - 6] ?? null;
-            return {
-              ...slot,
-              ...createRoleSnapshot(positionalRole),
-              role_source: positionalRole ? "inferred" : "unknown",
-              role_confidence: positionalRole ? 0.5 : 0,
-            };
+            return { ...slot, ...createRoleSnapshot(null) };
           }
 
           if (enemyRoleResolution?.releasedCellId === slot.cell_id) {
-            // Released slot also resets to positional default
-            const positionalRole = roleOrder[slot.cell_id - 6] ?? null;
-            return {
-              ...slot,
-              ...createRoleSnapshot(positionalRole),
-              role_source: positionalRole ? "inferred" : "unknown",
-              role_confidence: positionalRole ? 0.5 : 0,
-            };
+            return { ...slot, ...createRoleSnapshot(null) };
           }
 
           return slot;
@@ -843,6 +989,16 @@ export default function App() {
               bans={recommendations.bans}
               bundle={recommendations}
               defaultTab={defaultTab}
+              runeData={runeRecommendations}
+              buildData={buildRecommendation}
+              runeLookup={runeLookup}
+              itemLookup={itemLookup}
+              runeLoading={runeLoading}
+              buildLoading={buildLoading}
+              lcuConnected={lcuState.connected}
+              showRuneTab={localSlotForRunes != null}
+              showBuildTab={localSlotForRunes != null && effectiveDraftState.enemy_team_picks.some((s) => s.champion_id > 0)}
+              onApplyRunes={handleApplyRunes}
             />
           </section>
         </div>

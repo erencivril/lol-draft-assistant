@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tier_stats (
     ban_rate REAL NOT NULL,
     tier_grade TEXT NOT NULL,
     pbi REAL NOT NULL DEFAULT 0,
+    lane_rate REAL NOT NULL DEFAULT 0,
     games INTEGER NOT NULL,
     scope_generation_id TEXT,
     patch TEXT NOT NULL,

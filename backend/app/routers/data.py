@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
+
+from app.services.item_rune_sync import ItemRuneSyncService
 
 router = APIRouter(prefix="/api", tags=["data"])
 
@@ -41,3 +44,38 @@ async def get_tierlist(
 @router.get("/recommendations")
 async def get_recommendations(request: Request, session: str | None = None):
     return (await _get_session(request, session)).runtime.recommendations
+
+
+@router.get("/data/items")
+async def get_items(request: Request):
+    svc: ItemRuneSyncService | None = getattr(request.app.state, "item_rune_sync", None)
+    if svc is None or not svc.items:
+        return JSONResponse(content={}, status_code=200)
+    return {
+        str(item_id): {
+            "name": item.name,
+            "image_url": item.image_url,
+            "gold": item.gold,
+            "tags": item.tags,
+            "is_boot": item.is_boot,
+        }
+        for item_id, item in svc.items.items()
+    }
+
+
+@router.get("/data/runes")
+async def get_runes(request: Request):
+    svc: ItemRuneSyncService | None = getattr(request.app.state, "item_rune_sync", None)
+    if svc is None or not svc.runes:
+        return JSONResponse(content={}, status_code=200)
+    return {
+        str(rune_id): {
+            "name": rune.name,
+            "image_url": rune.image_url,
+            "tree_name": rune.tree_name,
+            "tree_id": rune.tree_id,
+            "row": rune.row,
+            "is_keystone": rune.is_keystone,
+        }
+        for rune_id, rune in svc.runes.items()
+    }

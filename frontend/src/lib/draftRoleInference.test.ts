@@ -215,7 +215,7 @@ describe("inferDraftRoles", () => {
     expect(resolved.enemy_team_picks[1].role_source).toBe("manual");
   });
 
-  it("assigns remaining roles to empty enemy slots so every slot has a role", () => {
+  it("does not assign roles to empty enemy slots", () => {
     const draftState: DraftState = {
       ...baseDraftState,
       enemy_team_picks: [
@@ -247,15 +247,12 @@ describe("inferDraftRoles", () => {
 
     const resolved = inferDraftRoles(draftState, championLookup);
 
-    // Empty slots get the remaining unoccupied roles (jungle, bottom)
-    const emptyRoles = [resolved.enemy_team_picks[2].effective_role, resolved.enemy_team_picks[3].effective_role];
-    expect(emptyRoles).toContain("jungle");
-    expect(emptyRoles).toContain("bottom");
-    expect(resolved.enemy_team_picks[2].role_source).toBe("inferred");
-    expect(resolved.enemy_team_picks[3].role_source).toBe("inferred");
+    // Empty slots (no champion) should stay without roles
+    expect(resolved.enemy_team_picks[2].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[3].effective_role).toBeNull();
   });
 
-  it("assigns the last remaining lane to a single open enemy slot", () => {
+  it("does not assign a role to an empty slot even when one role remains", () => {
     const draftState: DraftState = {
       ...baseDraftState,
       enemy_team_picks: [
@@ -288,6 +285,70 @@ describe("inferDraftRoles", () => {
           role_candidates: [{ role: "bottom", confidence: 1 }],
         }),
         createSlot(10, 0),
+      ],
+    };
+
+    const resolved = inferDraftRoles(draftState, championLookup);
+
+    // Empty slot (no champion) stays without a role
+    expect(resolved.enemy_team_picks[4].effective_role).toBeNull();
+  });
+
+  it("infers role for a single enemy champion among empty slots", () => {
+    const draftState: DraftState = {
+      ...baseDraftState,
+      enemy_team_picks: [
+        createSlot(6, 3),
+        createSlot(7, 0),
+        createSlot(8, 0),
+        createSlot(9, 0),
+        createSlot(10, 0),
+      ],
+    };
+
+    const resolved = inferDraftRoles(draftState, championLookup);
+
+    expect(resolved.enemy_team_picks[0].effective_role).toBe("middle");
+    expect(resolved.enemy_team_picks[0].role_source).toBe("inferred");
+    expect(resolved.enemy_team_picks[1].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[2].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[3].effective_role).toBeNull();
+    expect(resolved.enemy_team_picks[4].effective_role).toBeNull();
+  });
+
+  it("assigns the last remaining role to a champion-holding slot", () => {
+    const draftState: DraftState = {
+      ...baseDraftState,
+      enemy_team_picks: [
+        createSlot(6, 1, {
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        }),
+        createSlot(7, 2, {
+          assigned_role: "jungle",
+          effective_role: "jungle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "jungle", confidence: 1 }],
+        }),
+        createSlot(8, 3, {
+          assigned_role: "middle",
+          effective_role: "middle",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "middle", confidence: 1 }],
+        }),
+        createSlot(9, 4, {
+          assigned_role: "bottom",
+          effective_role: "bottom",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "bottom", confidence: 1 }],
+        }),
+        createSlot(10, 5),
       ],
     };
 

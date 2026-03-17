@@ -18,7 +18,7 @@ class FakeProvider:
         self.bundle = bundle
         self.calls = 0
 
-    async def refresh(self, *, region: str, rank_tier: str, role: str, patch: str, browser=None) -> ScrapeBundle:
+    async def refresh(self, *, region: str, rank_tier: str, role: str, patch: str, include_builds: bool = True) -> ScrapeBundle:
         self.calls += 1
         return self.bundle
 
@@ -246,7 +246,7 @@ async def test_refresh_scope_resume_does_not_trust_partial_counts_without_comple
         resume=True,
     )
 
-    assert provider.calls == 1
+    assert provider.calls == 2  # tier refresh + build refresh
 
 
 @pytest.mark.asyncio

@@ -60,12 +60,10 @@ class Settings(BaseSettings):
     ddragon_champions_url: str = "https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/champion.json"
     ddragon_icon_url: str = "https://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{name}.png"
 
-    lolalytics_base_url: str = "https://lolalytics.com/lol"
     default_region: str = "TR"
     default_rank_tier: str = "emerald"
     poll_interval_seconds: float = 2.0
     scrape_page_concurrency: int = 6
-    scrape_fallback_concurrency: int = 1
     scrape_timeout_seconds: float = 45.0
     scrape_delay_seconds: float = 0.5
     scrape_stale_run_minutes: int = 30

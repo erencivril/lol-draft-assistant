@@ -1,4 +1,11 @@
-import type { RecommendationBundle, StatusPayload } from "../types";
+import type {
+  BuildRecommendResponse,
+  ItemDefinition,
+  RecommendationBundle,
+  RuneDefinition,
+  RuneRecommendResponse,
+  StatusPayload,
+} from "../types";
 
 export type ChampionCatalogItem = {
   champion_id: number;
@@ -61,7 +68,20 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = typeof body?.detail === "string"
+        ? body.detail
+        : JSON.stringify(body?.detail ?? body);
+    } catch {
+      /* no parseable body */
+    }
+    throw new Error(
+      detail
+        ? `${response.status}: ${detail}`
+        : `Request failed: ${response.status}`
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -80,4 +100,41 @@ export function recommendDraft(payload: RecommendPayload): Promise<Recommendatio
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type RuneRecommendPayload = {
+  champion_id: number;
+  role: string;
+  enemy_slots: Array<{ champion_id: number; role: string }>;
+  rank_tier?: string;
+};
+
+export type BuildRecommendPayload = {
+  champion_id: number;
+  role: string;
+  keystone_id?: number | null;
+  enemy_slots: Array<{ champion_id: number; role: string }>;
+  rank_tier?: string;
+};
+
+export function recommendRunes(payload: RuneRecommendPayload): Promise<RuneRecommendResponse> {
+  return fetchJson<RuneRecommendResponse>("/api/recommend/runes", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function recommendBuild(payload: BuildRecommendPayload): Promise<BuildRecommendResponse> {
+  return fetchJson<BuildRecommendResponse>("/api/recommend/build", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchItems(): Promise<Record<string, ItemDefinition>> {
+  return fetchJson<Record<string, ItemDefinition>>("/api/data/items");
+}
+
+export async function fetchRunes(): Promise<Record<string, RuneDefinition>> {
+  return fetchJson<Record<string, RuneDefinition>>("/api/data/runes");
 }

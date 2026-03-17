@@ -28,6 +28,5 @@ class StatsProvider:
         rank_tier: str,
         role: str,
         patch: str,
-        browser: Any | None = None,
     ) -> ScrapeBundle:
         raise NotImplementedError

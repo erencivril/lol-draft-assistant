@@ -161,7 +161,7 @@ describe("DraftBoard", () => {
     expect(onSlotRoleChange).toHaveBeenCalledWith("enemy", 6, "support");
   });
 
-  it("defaults to first role option when slot has no effective role", () => {
+  it("shows placeholder when slot has no effective role", () => {
     const noRoleDraftState: DraftState = {
       ...draftState,
       enemy_team_picks: [
@@ -192,8 +192,7 @@ describe("DraftBoard", () => {
     );
 
     const roleSelect = screen.getByLabelText("Enemy 1 role");
-    // Falls back to first role option when no effective role is set
-    expect(roleSelect).toHaveValue("top");
+    expect(roleSelect).toHaveValue("");
   });
 
   it("shows inferred enemy roles and confidence directly on the board", () => {
@@ -235,6 +234,40 @@ describe("DraftBoard", () => {
       .find((node) => node.tagName === "SPAN");
 
     expect(supportSummary).toBeDefined();
+  });
+
+  it("shows MANUAL label for manually assigned enemy roles", () => {
+    const manualRoleDraftState: DraftState = {
+      ...draftState,
+      enemy_team_picks: [
+        {
+          ...draftState.enemy_team_picks[0],
+          assigned_role: "top",
+          effective_role: "top",
+          role_source: "manual",
+          role_confidence: 1,
+          role_candidates: [{ role: "top", confidence: 1 }],
+        },
+      ],
+    };
+
+    render(
+      <DraftBoard
+        champions={champions}
+        draftState={manualRoleDraftState}
+        lcuConnected
+        targetCellId={3}
+        localPlayerCellId={3}
+        onSlotChampionChange={vi.fn()}
+        onSlotRoleChange={vi.fn()}
+        onTargetSlotChange={vi.fn()}
+        onRecommendForMe={vi.fn()}
+        onBanChange={vi.fn()}
+      />
+    );
+
+    const enemyCard = screen.getByText("Enemy 1").closest("article") as HTMLElement;
+    expect(within(enemyCard).getByText("MANUAL")).toBeInTheDocument();
   });
 
   it("opens the champion picker and emits selection changes", async () => {

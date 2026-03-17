@@ -66,7 +66,7 @@ const bundle: RecommendationBundle = {
 
 describe("RecommendationPanel", () => {
   it("renders tabs with pick and ban counts", () => {
-    render(<RecommendationPanel picks={bundle.picks} bans={bundle.bans} bundle={bundle} defaultTab="picks" />);
+    render(<RecommendationPanel picks={bundle.picks} bans={bundle.bans} bundle={bundle} defaultTab="picks" runeData={null} buildData={null} runeLookup={{}} itemLookup={{}} runeLoading={false} buildLoading={false} lcuConnected={false} showRuneTab={false} showBuildTab={false} />);
 
     expect(screen.getByText("Picks (1)")).toBeInTheDocument();
     expect(screen.getByText("Bans (0)")).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("RecommendationPanel", () => {
   it("shows thin evidence badge and expandable details", async () => {
     const user = userEvent.setup();
 
-    render(<RecommendationPanel picks={bundle.picks} bans={bundle.bans} bundle={bundle} defaultTab="picks" />);
+    render(<RecommendationPanel picks={bundle.picks} bans={bundle.bans} bundle={bundle} defaultTab="picks" runeData={null} buildData={null} runeLookup={{}} itemLookup={{}} runeLoading={false} buildLoading={false} lcuConnected={false} showRuneTab={false} showBuildTab={false} />);
 
     expect(screen.getByText("thin evidence")).toBeInTheDocument();
 

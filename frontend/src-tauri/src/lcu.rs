@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone, Serialize)]
 struct RoleCandidatePayload {
@@ -28,6 +29,14 @@ struct TeamSlotPayload {
 }
 
 #[derive(Clone, Serialize)]
+pub struct RunePagePayload {
+    pub keystone_id: i64,
+    pub primary_style_id: i64,
+    pub sub_style_id: i64,
+    pub selected_perk_ids: Vec<i64>,
+}
+
+#[derive(Clone, Serialize)]
 struct DraftStatePayload {
     phase: String,
     timer_seconds_left: Option<i64>,
@@ -46,6 +55,7 @@ struct DraftStatePayload {
     patch: Option<String>,
     queue_type: Option<String>,
     is_local_players_turn: bool,
+    local_player_runes: Option<RunePagePayload>,
 }
 
 #[derive(Clone, Serialize)]
@@ -53,9 +63,14 @@ pub struct LcuDraftUpdatePayload {
     connected: bool,
     status: String,
     draft_state: Option<DraftStatePayload>,
+    gameflow_phase: Option<String>,
 }
 
-struct LockfileCredentials {
+/// Shared LCU credentials so Tauri commands can reach the LCU.
+pub struct LcuCredentialsState(pub Mutex<Option<LockfileCredentials>>);
+
+#[derive(Clone)]
+pub struct LockfileCredentials {
     port: u16,
     password: String,
 }
@@ -65,18 +80,116 @@ struct CurrentActionPayload {
     action_type: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Tauri command: apply runes via LCU
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ApplyRunesRequest {
+    pub primary_style_id: i64,
+    pub sub_style_id: i64,
+    pub selected_perk_ids: Vec<i64>,
+}
+
+#[tauri::command]
+pub async fn apply_runes(
+    request: ApplyRunesRequest,
+    credentials_state: State<'_, LcuCredentialsState>,
+) -> std::result::Result<String, String> {
+    let creds = {
+        let guard = credentials_state.0.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or_else(|| "LCU not connected".to_string())?
+    };
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // First, get current rune page ID
+    let current_page_url = format!(
+        "https://127.0.0.1:{}/lol-perks/v1/currentpage",
+        creds.port
+    );
+    let current_response = client
+        .get(&current_page_url)
+        .basic_auth("riot", Some(creds.password.as_str()))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch current rune page: {e}"))?;
+
+    if !current_response.status().is_success() {
+        return Err(format!(
+            "Failed to fetch current rune page ({})",
+            current_response.status()
+        ));
+    }
+
+    let current_page: Value = current_response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse current rune page: {e}"))?;
+
+    let page_id = current_page
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "Could not find current rune page ID".to_string())?;
+
+    // Build the update payload
+    let update_payload = serde_json::json!({
+        "selectedPerkIds": request.selected_perk_ids,
+        "primaryStyleId": request.primary_style_id,
+        "subStyleId": request.sub_style_id,
+    });
+
+    // PUT to update the current page
+    let put_url = format!(
+        "https://127.0.0.1:{}/lol-perks/v1/pages/{}",
+        creds.port, page_id
+    );
+    let put_response = client
+        .put(&put_url)
+        .basic_auth("riot", Some(creds.password.as_str()))
+        .json(&update_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to apply runes: {e}"))?;
+
+    if put_response.status().is_success() {
+        Ok("Runes applied successfully".to_string())
+    } else {
+        let status = put_response.status();
+        let body = put_response.text().await.unwrap_or_default();
+        Err(format!("Failed to apply runes ({status}): {body}"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Polling loop
+// ---------------------------------------------------------------------------
+
 pub async fn run_polling(app: AppHandle) {
     let mut previous_payload = String::new();
+    let mut previous_gameflow = String::new();
 
     loop {
-        let payload = match poll_lcu().await {
+        let payload = match poll_lcu(&app).await {
             Ok(payload) => payload,
             Err(error) => LcuDraftUpdatePayload {
                 connected: false,
                 status: format!("LCU polling failed: {error}"),
                 draft_state: None,
+                gameflow_phase: None,
             },
         };
+
+        // Emit game-phase-change when gameflow phase transitions
+        let current_phase = payload.gameflow_phase.clone().unwrap_or_default();
+        if current_phase != previous_gameflow {
+            let _ = app.emit("game-phase-change", &current_phase);
+            previous_gameflow = current_phase;
+        }
 
         let fingerprint = serde_json::to_string(&payload).unwrap_or_default();
         if fingerprint != previous_payload {
@@ -88,21 +201,51 @@ pub async fn run_polling(app: AppHandle) {
     }
 }
 
-async fn poll_lcu() -> Result<LcuDraftUpdatePayload> {
+async fn poll_lcu(app: &AppHandle) -> Result<LcuDraftUpdatePayload> {
     let Some(lockfile_path) = find_lockfile() else {
+        // Clear stored credentials
+        if let Some(state) = app.try_state::<LcuCredentialsState>() {
+            if let Ok(mut guard) = state.0.lock() {
+                *guard = None;
+            }
+        }
         return Ok(LcuDraftUpdatePayload {
             connected: false,
             status: "Waiting for League Client".to_string(),
             draft_state: None,
+            gameflow_phase: None,
         });
     };
 
     let credentials = read_lockfile(lockfile_path).await?;
+
+    // Store credentials for Tauri commands
+    if let Some(state) = app.try_state::<LcuCredentialsState>() {
+        if let Ok(mut guard) = state.0.lock() {
+            *guard = Some(credentials.clone());
+        }
+    }
+
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(3))
         .build()
         .context("failed to build the LCU HTTP client")?;
+
+    // Fetch gameflow phase
+    let gameflow_phase = fetch_optional_text(
+        &client,
+        credentials.port,
+        credentials.password.as_str(),
+        "/lol-gameflow/v1/gameflow-phase",
+    )
+    .await
+    .ok()
+    .map(|s| s.trim_matches('"').to_string());
+
+    // Check if game is in progress (no champ select session available)
+    let phase_str = gameflow_phase.as_deref().unwrap_or("");
+    let in_game = matches!(phase_str, "InProgress" | "GameStart" | "WaitingForStats");
 
     let session_url = format!(
         "https://127.0.0.1:{}/lol-champ-select/v1/session",
@@ -116,10 +259,16 @@ async fn poll_lcu() -> Result<LcuDraftUpdatePayload> {
         .context("failed to query /lol-champ-select/v1/session")?;
 
     if session_response.status() == StatusCode::NOT_FOUND {
+        let status_msg = if in_game {
+            "Game in progress".to_string()
+        } else {
+            "League Client connected, waiting for champ select".to_string()
+        };
         return Ok(LcuDraftUpdatePayload {
             connected: true,
-            status: "League Client connected, waiting for champ select".to_string(),
+            status: status_msg,
             draft_state: None,
+            gameflow_phase,
         });
     }
 
@@ -128,6 +277,7 @@ async fn poll_lcu() -> Result<LcuDraftUpdatePayload> {
             connected: true,
             status: format!("League Client connected ({})", session_response.status()),
             draft_state: None,
+            gameflow_phase,
         });
     }
 
@@ -135,19 +285,59 @@ async fn poll_lcu() -> Result<LcuDraftUpdatePayload> {
         .json()
         .await
         .context("failed to deserialize LCU session JSON")?;
-    let gameflow_phase = fetch_optional_text(
-        &client,
-        credentials.port,
-        credentials.password.as_str(),
-        "/lol-gameflow/v1/gameflow-phase",
-    )
-    .await
-    .ok();
+
+    // Fetch current rune page during champ select
+    let rune_page = fetch_current_rune_page(&client, &credentials).await;
 
     Ok(LcuDraftUpdatePayload {
         connected: true,
         status: "Champ select detected".to_string(),
-        draft_state: Some(build_draft_state(&session_value, gameflow_phase.as_deref())),
+        draft_state: Some(build_draft_state(
+            &session_value,
+            gameflow_phase.as_deref(),
+            rune_page,
+        )),
+        gameflow_phase,
+    })
+}
+
+async fn fetch_current_rune_page(
+    client: &reqwest::Client,
+    credentials: &LockfileCredentials,
+) -> Option<RunePagePayload> {
+    let url = format!(
+        "https://127.0.0.1:{}/lol-perks/v1/currentpage",
+        credentials.port
+    );
+    let response = client
+        .get(&url)
+        .basic_auth("riot", Some(credentials.password.as_str()))
+        .send()
+        .await
+        .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let page: Value = response.json().await.ok()?;
+    let selected_perk_ids = page
+        .get("selectedPerkIds")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_i64).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let primary_style_id = page.get("primaryStyleId").and_then(Value::as_i64).unwrap_or(0);
+    let sub_style_id = page.get("subStyleId").and_then(Value::as_i64).unwrap_or(0);
+
+    // First perk is the keystone
+    let keystone_id = selected_perk_ids.first().copied().unwrap_or(0);
+
+    Some(RunePagePayload {
+        keystone_id,
+        primary_style_id,
+        sub_style_id,
+        selected_perk_ids,
     })
 }
 
@@ -171,7 +361,11 @@ async fn fetch_optional_text(
     response.text().await.with_context(|| format!("failed to read {path} response"))
 }
 
-fn build_draft_state(session_value: &Value, gameflow_phase: Option<&str>) -> DraftStatePayload {
+fn build_draft_state(
+    session_value: &Value,
+    gameflow_phase: Option<&str>,
+    rune_page: Option<RunePagePayload>,
+) -> DraftStatePayload {
     let local_player_cell_id = session_value
         .get("localPlayerCellId")
         .and_then(Value::as_i64);
@@ -227,6 +421,7 @@ fn build_draft_state(session_value: &Value, gameflow_phase: Option<&str>) -> Dra
             .and_then(Value::as_str)
             .map(ToString::to_string),
         is_local_players_turn: current_action.actor_cell_id == local_player_cell_id,
+        local_player_runes: rune_page,
     }
 }
 

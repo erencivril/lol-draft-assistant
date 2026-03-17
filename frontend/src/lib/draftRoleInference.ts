@@ -203,56 +203,42 @@ function shouldReplaceExplicitRole(
 }
 
 function assignForcedOpenRole(slots: TeamSlot[]): TeamSlot[] {
-  // Collect roles firmly claimed by manual/lcu or champion-inferred slots
-  const firmRoles = new Set<string>();
+  const claimedRoles = new Set<string>();
+  const unassignedChampionCellIds: number[] = [];
+
   for (const slot of slots) {
     const role = normalizeRole(slot.effective_role ?? slot.assigned_role);
-    if (!role) {
-      continue;
-    }
-    if (slot.role_source === "manual" || slot.role_source === "lcu" || slot.champion_id > 0) {
-      firmRoles.add(role);
+    if (role) {
+      claimedRoles.add(role);
+    } else if (slot.champion_id > 0) {
+      unassignedChampionCellIds.push(slot.cell_id);
     }
   }
 
-  // Find slots that need a role: empty slots without a firm claim, or with a duplicate role
-  const needsRole: Set<number> = new Set();
-  const softClaimed = new Set<string>();
-  for (const slot of slots) {
-    if (slot.role_source === "manual" || slot.role_source === "lcu" || slot.champion_id > 0) {
-      continue;
-    }
-    const role = normalizeRole(slot.effective_role ?? slot.assigned_role);
-    if (!role || firmRoles.has(role) || softClaimed.has(role)) {
-      needsRole.add(slot.cell_id);
-    } else {
-      softClaimed.add(role);
-    }
-  }
-
-  if (needsRole.size === 0) {
+  if (unassignedChampionCellIds.length !== 1) {
     return slots;
   }
 
-  const allClaimed = new Set([...firmRoles, ...softClaimed]);
-  const availableRoles = supportedRoles.filter((role) => !allClaimed.has(role));
+  const availableRoles = supportedRoles.filter((role) => !claimedRoles.has(role));
+  if (availableRoles.length !== 1) {
+    return slots;
+  }
 
-  let availableIndex = 0;
-  return slots.map((slot) => {
-    if (!needsRole.has(slot.cell_id) || availableIndex >= availableRoles.length) {
-      return slot;
-    }
-    const newRole = availableRoles[availableIndex];
-    availableIndex += 1;
-    return {
-      ...slot,
-      assigned_role: newRole,
-      effective_role: newRole,
-      role_source: "inferred" as const,
-      role_confidence: 0.5,
-      role_candidates: [{ role: newRole, confidence: 0.5 }],
-    };
-  });
+  const targetCellId = unassignedChampionCellIds[0];
+  const forcedRole = availableRoles[0];
+
+  return slots.map((slot) =>
+    slot.cell_id === targetCellId
+      ? {
+          ...slot,
+          assigned_role: forcedRole,
+          effective_role: forcedRole,
+          role_source: "inferred" as const,
+          role_confidence: 0.5,
+          role_candidates: [{ role: forcedRole, confidence: 0.5 }],
+        }
+      : slot
+  );
 }
 
 function clearRole(slot: TeamSlot): TeamSlot {

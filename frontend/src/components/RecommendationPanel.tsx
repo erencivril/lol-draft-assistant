@@ -1,10 +1,16 @@
 import { useState } from "react";
 import type {
+  BuildRecommendResponse,
+  ItemDefinition,
   RecommendationBundle,
   RecommendationItem,
   RecommendationRelationDetail,
   RecommendationScoreComponent,
+  RuneDefinition,
+  RuneRecommendResponse,
 } from "../types";
+import { RunePanel } from "./RunePanel";
+import { BuildPanel } from "./BuildPanel";
 
 function formatGames(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
@@ -176,11 +182,23 @@ function RecommendationCard({ item, rank, isBan }: { item: RecommendationItem; r
   );
 }
 
+type TabKey = "picks" | "bans" | "runes" | "build";
+
 type RecommendationTabsProps = {
   picks: RecommendationItem[];
   bans: RecommendationItem[];
   bundle: RecommendationBundle;
   defaultTab: "picks" | "bans";
+  runeData: RuneRecommendResponse | null;
+  buildData: BuildRecommendResponse | null;
+  runeLookup: Record<string, RuneDefinition>;
+  itemLookup: Record<string, ItemDefinition>;
+  runeLoading: boolean;
+  buildLoading: boolean;
+  lcuConnected: boolean;
+  showRuneTab: boolean;
+  showBuildTab: boolean;
+  onApplyRunes?: (keystoneId: number) => void;
 };
 
 function TrustDots({ bundle }: { bundle: RecommendationBundle }) {
@@ -193,8 +211,39 @@ function TrustDots({ bundle }: { bundle: RecommendationBundle }) {
   );
 }
 
-export function RecommendationPanel({ picks, bans, bundle, defaultTab }: RecommendationTabsProps) {
-  const [activeTab, setActiveTab] = useState<"picks" | "bans">(defaultTab);
+function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+        active
+          ? "bg-zinc-800 text-zinc-100"
+          : "text-zinc-500 hover:text-zinc-300"
+      }`}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function RecommendationPanel({
+  picks,
+  bans,
+  bundle,
+  defaultTab,
+  runeData,
+  buildData,
+  runeLookup,
+  itemLookup,
+  runeLoading,
+  buildLoading,
+  lcuConnected,
+  showRuneTab,
+  showBuildTab,
+  onApplyRunes,
+}: RecommendationTabsProps) {
+  const [activeTab, setActiveTab] = useState<TabKey>(defaultTab);
   const items = activeTab === "picks" ? picks : bans;
   const isBan = activeTab === "bans";
 
@@ -202,28 +251,14 @@ export function RecommendationPanel({ picks, bans, bundle, defaultTab }: Recomme
     <section>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              activeTab === "picks"
-                ? "bg-zinc-800 text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-300"
-            }`}
-            onClick={() => setActiveTab("picks")}
-          >
-            Picks ({picks.length})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              activeTab === "bans"
-                ? "bg-zinc-800 text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-300"
-            }`}
-            onClick={() => setActiveTab("bans")}
-          >
-            Bans ({bans.length})
-          </button>
+          <TabButton label={`Picks (${picks.length})`} active={activeTab === "picks"} onClick={() => setActiveTab("picks")} />
+          <TabButton label={`Bans (${bans.length})`} active={activeTab === "bans"} onClick={() => setActiveTab("bans")} />
+          {showRuneTab ? (
+            <TabButton label="Runes" active={activeTab === "runes"} onClick={() => setActiveTab("runes")} />
+          ) : null}
+          {showBuildTab ? (
+            <TabButton label="Build" active={activeTab === "build"} onClick={() => setActiveTab("build")} />
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -242,19 +277,35 @@ export function RecommendationPanel({ picks, bans, bundle, defaultTab }: Recomme
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        {items.length === 0 ? (
-          <p className="py-6 text-center text-xs text-zinc-600">No recommendations available yet.</p>
-        ) : null}
-        {items.map((item, i) => (
-          <RecommendationCard
-            key={`${activeTab}-${item.champion_id}-${i}`}
-            item={item}
-            rank={i + 1}
-            isBan={isBan}
-          />
-        ))}
-      </div>
+      {activeTab === "runes" ? (
+        <RunePanel
+          data={runeData}
+          runeLookup={runeLookup}
+          loading={runeLoading}
+          lcuConnected={lcuConnected}
+          onApplyRunes={onApplyRunes}
+        />
+      ) : activeTab === "build" ? (
+        <BuildPanel
+          data={buildData}
+          itemLookup={itemLookup}
+          loading={buildLoading}
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {items.length === 0 ? (
+            <p className="py-6 text-center text-xs text-zinc-600">No recommendations available yet.</p>
+          ) : null}
+          {items.map((item, i) => (
+            <RecommendationCard
+              key={`${activeTab}-${item.champion_id}-${i}`}
+              item={item}
+              rank={i + 1}
+              isBan={isBan}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

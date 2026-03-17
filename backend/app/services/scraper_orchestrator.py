@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -177,7 +176,6 @@ class ScraperOrchestrator:
         )
         logger.info("Refreshing region=%s rank=%s role=%s mode=%s", region, rank_tier, role, mode)
         try:
-            provider_supports_incremental = self._provider_supports_incremental(provider)
             tier_bundle = await self._provider_refresh(
                 provider=provider,
                 region=region,
@@ -206,17 +204,14 @@ class ScraperOrchestrator:
             bundle = tier_bundle
 
             if build_refresh_needed and not tier_bundle.empty_scope:
-                if provider_supports_incremental:
-                    bundle = await self._provider_refresh(
-                        provider=provider,
-                        region=region,
-                        rank_tier=rank_tier,
-                        role=role,
-                        patch=patch,
-                        include_builds=True,
-                    )
-                else:
-                    bundle = tier_bundle
+                bundle = await self._provider_refresh(
+                    provider=provider,
+                    region=region,
+                    rank_tier=rank_tier,
+                    role=role,
+                    patch=patch,
+                    include_builds=True,
+                )
                 await self.repository.replace_matchups(region=region, rank_tier=rank_tier, role=role, patch=patch, records=bundle.matchups)
                 await self.repository.replace_synergies(region=region, rank_tier=rank_tier, role=role, patch=patch, records=bundle.synergies)
                 build_matchups = len(bundle.matchups)
@@ -495,13 +490,6 @@ class ScraperOrchestrator:
         except ValueError:
             return True
 
-    def _provider_supports_incremental(self, provider) -> bool:
-        try:
-            signature = inspect.signature(provider.refresh)
-        except (TypeError, ValueError):
-            return False
-        return "include_builds" in signature.parameters
-
     async def _provider_refresh(
         self,
         *,
@@ -512,18 +500,10 @@ class ScraperOrchestrator:
         patch: str,
         include_builds: bool,
     ):
-        try:
-            return await provider.refresh(
-                region=region,
-                rank_tier=rank_tier,
-                role=role,
-                patch=patch,
-                include_builds=include_builds,
-            )
-        except TypeError:
-            return await provider.refresh(
-                region=region,
-                rank_tier=rank_tier,
-                role=role,
-                patch=patch,
-            )
+        return await provider.refresh(
+            region=region,
+            rank_tier=rank_tier,
+            role=role,
+            patch=patch,
+            include_builds=include_builds,
+        )

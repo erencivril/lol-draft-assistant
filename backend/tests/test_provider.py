@@ -5,7 +5,7 @@ import pytest
 from app.config import Settings
 from app.db.repository import ChampionRecord
 from app.domain.ranks import normalize_rank_tier, rank_display_name
-from app.providers.lolalytics_provider import LolalyticsHttpSession, LolalyticsProvider, TierPageResult
+from app.providers.lolalytics_provider import LolalyticsHttpSession, LolalyticsProvider, _compute_tier_grade
 
 
 def build_provider() -> LolalyticsProvider:
@@ -104,42 +104,6 @@ def test_lolalytics_patch_trims_micro_version() -> None:
     assert provider._lolalytics_patch("16.5") == "16.5"
 
 
-def test_http_session_parses_build_counter_rows_from_qwik_state() -> None:
-    session = LolalyticsHttpSession(Settings())
-    rows = session._parse_build_counter_rows(
-        """
-        <html>
-          <body>
-            <script type="qwik/json">
-              {
-                "refs": {},
-                "ctx": {},
-                "objs": [
-                  {"data": "3", "lane": "4"},
-                  null,
-                  null,
-                  [[2, 53.1, 1.4, 7.5, 0.8, 1250]],
-                  "top"
-                ],
-                "subs": []
-              }
-            </script>
-          </body>
-        </html>
-        """
-    )
-
-    assert rows == [
-        {
-            "row_role": "top",
-            "champion_id": 2,
-            "label": "",
-            "href": "",
-            "metrics": ["53.1", "1.4", "7.5", "0.8", "1250"],
-        }
-    ]
-
-
 def test_http_session_parses_team_payload_into_synergy_items() -> None:
     session = LolalyticsHttpSession(Settings())
     rows = session._parse_team_payload(
@@ -170,92 +134,10 @@ def test_http_session_parses_team_payload_into_synergy_items() -> None:
     ]
 
 
-def test_http_session_parses_tier_rows_from_ssr_html() -> None:
-    session = LolalyticsHttpSession(Settings())
-    rows = session._parse_tier_rows(
-        """
-        <div class="flex h-[52px] justify-between text-[13px] text-[#cccccc]">
-          <div>1</div>
-          <div><a href="/lol/ahri/build/?tier=emerald&amp;region=tr"><img alt="Ahri" /></a></div>
-          <div><a href="/lol/ahri/build/?tier=emerald&amp;region=tr">Ahri</a></div>
-          <div>S</div>
-          <div>88.10</div>
-          <div><span>52.71</span><br /><span>+</span><span>1.52</span></div>
-          <div>11.66</div>
-          <div>23.90</div>
-          <div>17</div>
-          <div>4,022</div>
-          <q:template hidden aria-hidden="true"><div>Ahri tooltip</div></q:template>
-        </div>
-        """
-    )
-
-    assert rows == [
-        {
-            "href": "/lol/ahri/build/?tier=emerald&region=tr",
-            "name": "Ahri",
-            "lines": ["1", "Ahri", "S", "88.10", "52.71", "+1.52", "11.66", "23.90", "17", "4,022"],
-        }
-    ]
-
-
-def test_http_session_marks_empty_tier_scope_without_build_links() -> None:
-    session = LolalyticsHttpSession(Settings())
-    page = session._parse_tier_page(
-        """
-        <html>
-          <head>
-            <title>LoL Tier List - LoLalytics LoL Tier List for Patch 16.5</title>
-            <link rel="canonical" href="https://lolalytics.com/lol/tierlist/?lane=top&tier=grandmaster&region=br&patch=16.5" />
-          </head>
-          <body q:route="lol/tierlist/">
-            <div class="filters">No ranked rows for this scope.</div>
-          </body>
-        </html>
-        """
-    )
-
-    assert page.rows == []
-    assert page.is_empty_scope is True
-
-
 def test_normalize_rank_tier_maps_legacy_master_plus_alias() -> None:
     assert normalize_rank_tier("master_plus") == "grandmaster_plus"
     assert normalize_rank_tier("Master+") == "grandmaster_plus"
     assert rank_display_name("grandmaster_plus") == "Grandmaster+"
-
-
-class _FakeBrowser:
-    def __init__(self) -> None:
-        self.called = False
-
-    async def fetch_tier_rows(self, _url: str) -> list[dict[str, object]]:
-        self.called = True
-        return []
-
-
-class _FakeHttpSession:
-    async def fetch_tier_rows(self, _url: str) -> TierPageResult:
-        return TierPageResult(rows=[], is_empty_scope=True)
-
-
-@pytest.mark.asyncio
-async def test_fetch_tier_stats_skips_browser_fallback_for_valid_empty_scope() -> None:
-    provider = build_provider()
-    browser = _FakeBrowser()
-    http = _FakeHttpSession()
-
-    records = await provider._fetch_tier_stats(
-        browser=browser,
-        http=http,
-        region="BR",
-        rank_tier="grandmaster",
-        role="top",
-        patch="16.5.1",
-    )
-
-    assert records == []
-    assert browser.called is False
 
 
 def test_build_records_accept_direct_champion_ids() -> None:
@@ -297,3 +179,43 @@ def test_build_records_accept_direct_champion_ids() -> None:
     assert matchup_records[0].games == 1250
     assert synergy_records[0].teammate_id == 4
     assert synergy_records[0].games == 1400
+
+
+def test_parse_counter_items_maps_json_api_response() -> None:
+    provider = build_provider()
+    items = provider._parse_counter_items(
+        {
+            "stats": {"cid": 1, "lane": "middle"},
+            "counters": [
+                {"cid": 2, "vsWr": 56.5, "n": 1250, "d1": 3.16, "d2": 1.92, "allWr": 53.3, "defaultLane": "top"},
+                {"cid": 3, "vsWr": 48.1, "n": 800, "d1": -1.4, "d2": -5.0, "allWr": 49.5, "defaultLane": "support"},
+            ],
+        }
+    )
+
+    assert len(items) == 2
+    assert items[0]["row_role"] == "top"
+    assert items[0]["champion_id"] == 2
+    assert items[0]["metrics"] == ["56.5", "3.16", "1.92", "0", "1250"]
+    assert items[1]["row_role"] == "support"
+    assert items[1]["champion_id"] == 3
+
+
+def test_empty_counter_json_yields_empty_list() -> None:
+    provider = build_provider()
+    items = provider._parse_counter_items({"stats": {}, "counters": []})
+    assert items == []
+
+    items2 = provider._parse_counter_items({"stats": {}})
+    assert items2 == []
+
+
+def test_tier_grade_derivation() -> None:
+    assert _compute_tier_grade(1, 70) == "S+"
+    assert _compute_tier_grade(3, 70) == "S"
+    assert _compute_tier_grade(8, 70) == "A"
+    assert _compute_tier_grade(20, 70) == "B+"
+    assert _compute_tier_grade(40, 70) == "B"
+    assert _compute_tier_grade(55, 70) == "C"
+    assert _compute_tier_grade(60, 70) == "D"
+    assert _compute_tier_grade(1, 0) == "B"

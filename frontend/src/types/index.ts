@@ -189,6 +189,90 @@ export type DraftSocketPayload = {
   source_device_id?: string | null;
 };
 
+// Rune & Build recommendation types
+
+export type RuneMatchupDetail = {
+  opponent_name: string;
+  opponent_id: number;
+  opponent_role: string;
+  win_rate: number;
+  games: number;
+};
+
+export type RunePageRecommendation = {
+  keystone_id: number;
+  weighted_score: number;
+  total_games: number;
+  avg_win_rate: number;
+  matchup_details: RuneMatchupDetail[];
+};
+
+export type RuneStatOut = {
+  rune_id: number;
+  weighted_win_rate: number;
+  total_games: number;
+  pick_rate: number;
+};
+
+export type RuneRecommendResponse = {
+  rune_pages: RunePageRecommendation[];
+  per_rune_stats: RuneStatOut[];
+  fallback_used: boolean;
+};
+
+export type ItemMatchupContribution = {
+  opponent_name: string;
+  opponent_id: number;
+  opponent_role: string;
+  win_rate: number;
+  games: number;
+};
+
+export type ItemRecommendation = {
+  item_id: number;
+  weighted_score: number;
+  total_games: number;
+  avg_win_rate: number;
+  matchup_contributions: ItemMatchupContribution[];
+};
+
+export type BuildSlot = {
+  slot_name: string;
+  primary: ItemRecommendation | null;
+  alternatives: ItemRecommendation[];
+};
+
+export type BuildRecommendResponse = {
+  slots: BuildSlot[];
+  skill_order: string | null;
+  keystone_filtered: boolean;
+  fallback_used: boolean;
+};
+
+export type RunePagePayload = {
+  keystone_id: number;
+  primary_style_id: number;
+  sub_style_id: number;
+  selected_perk_ids: number[];
+};
+
+export type RuneDefinition = {
+  name: string;
+  image_url: string;
+  tree_name: string;
+  tree_id: number;
+  row: number;
+  is_keystone: boolean;
+};
+
+export type ItemDefinition = {
+  name: string;
+  image_url: string;
+  gold: number;
+  tags: string[];
+  is_boot: boolean;
+};
+
 export type DraftRoleOverridePayload = {
   overrides: Array<{
     team: "ally" | "enemy";
