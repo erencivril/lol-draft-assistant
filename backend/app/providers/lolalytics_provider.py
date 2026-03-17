@@ -307,16 +307,28 @@ class LolalyticsProvider(StatsProvider):
             "empty_scope": False,
             "parser_events": [],
         }
-        api_patch = self._lolalytics_patch(patch)
-        payload = await http.fetch_tier_json(
-            region=region,
-            rank_tier=rank_tier,
-            role=role,
-            patch=api_patch,
-        )
-        tier_data = payload.get("tier")
+        candidates = self._lolalytics_patch_candidates(patch)
+        tier_data = None
+        used_patch = candidates[0]
+        for candidate in candidates:
+            payload = await http.fetch_tier_json(
+                region=region,
+                rank_tier=rank_tier,
+                role=role,
+                patch=candidate,
+            )
+            tier_data = payload.get("tier")
+            if isinstance(tier_data, dict) and tier_data:
+                used_patch = candidate
+                if candidate != candidates[0]:
+                    logger.info(
+                        "Patch %s has no tier data for %s/%s/%s; fell back to %s",
+                        candidates[0], region, rank_tier, role, candidate,
+                    )
+                break
         if not isinstance(tier_data, dict) or not tier_data:
-            logger.info("Tier JSON has no data for %s/%s/%s; treating as empty scope", region, rank_tier, role)
+            logger.info("Tier JSON has no data for %s/%s/%s (tried %s); treating as empty scope",
+                        region, rank_tier, role, candidates)
             meta["empty_scope"] = True
             meta["parser_events"] = [
                 self._make_parser_event(
@@ -387,17 +399,26 @@ class LolalyticsProvider(StatsProvider):
         patch: str,
     ) -> tuple[list[MatchupRecord], list[SynergyRecord], list[dict[str, object]]]:
         fetched_at = datetime.now(UTC).isoformat()
-        api_patch = self._lolalytics_patch(patch)
+        # Use the same patch fallback logic as tier data
+        candidates = self._lolalytics_patch_candidates(patch)
+        api_patch = candidates[0]
+        # For counter/synergy, try first candidate; if empty try fallbacks
+        counter_payload = None
+        for candidate in candidates:
+            counter_payload = await http.fetch_counter_json(
+                champion_slug=champion.key.lower(),
+                region=region,
+                rank_tier=rank_tier,
+                role=role,
+                patch=candidate,
+            )
+            counter_items = self._parse_counter_items(counter_payload)
+            if counter_items:
+                api_patch = candidate
+                break
+        else:
+            counter_items = self._parse_counter_items(counter_payload or {})
         parser_events: list[dict[str, object]] = []
-
-        counter_payload = await http.fetch_counter_json(
-            champion_slug=champion.key.lower(),
-            region=region,
-            rank_tier=rank_tier,
-            role=role,
-            patch=api_patch,
-        )
-        counter_items = self._parse_counter_items(counter_payload)
 
         synergy_items = await http.fetch_build_synergy_rows(
             champion_slug=champion.key.lower(),
@@ -623,8 +644,36 @@ class LolalyticsProvider(StatsProvider):
             return 0
 
     def _lolalytics_patch(self, patch: str) -> str:
+        """Convert Riot patch (e.g. '16.6.1') to lolalytics format ('16.6').
+
+        If the exact minor patch isn't available yet on lolalytics, returns
+        the previous minor patch as a fallback candidate.  The caller should
+        use ``_lolalytics_patch_candidates`` when it needs the full fallback
+        chain.
+        """
         parts = patch.split(".")
         return ".".join(parts[:2]) if len(parts) >= 2 else patch
+
+    @staticmethod
+    def _lolalytics_patch_candidates(patch: str) -> list[str]:
+        """Return patch strings to try, in priority order.
+
+        Example for '16.6.1' → ['16.6', '16.5', '30']
+        '30' is lolalytics' rolling "current" window.
+        """
+        parts = patch.split(".")
+        major_minor = ".".join(parts[:2]) if len(parts) >= 2 else patch
+        candidates = [major_minor]
+        # Add previous minor as fallback
+        if len(parts) >= 2:
+            try:
+                major, minor = int(parts[0]), int(parts[1])
+                if minor > 1:
+                    candidates.append(f"{major}.{minor - 1}")
+            except ValueError:
+                pass
+        candidates.append("30")  # lolalytics "current" rolling window
+        return candidates
 
 
 def _compute_tier_grade(rank: int, total: int) -> str:
