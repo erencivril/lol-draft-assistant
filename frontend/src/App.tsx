@@ -501,6 +501,8 @@ export default function App() {
           const rawDraft = event.payload.connected && event.payload.draft_state ? event.payload.draft_state : null;
           const nextPlayerRunes = rawDraft?.local_player_runes ?? null;
           const nextDraftState = rawDraft;
+          const gamePhase = event.payload.gameflow_phase ?? "";
+          const isInGame = ["InProgress", "GameStart", "WaitingForStats"].includes(gamePhase);
           startTransition(() => {
             setLcuState({
               connected: event.payload.connected,
@@ -509,8 +511,11 @@ export default function App() {
                 (event.payload.connected ? "Champ select session detected" : "Waiting for League Client"),
               lastUpdatedAt: new Date().toISOString(),
             });
-            setLcuDraftState(nextDraftState);
-            setGameflowPhase(event.payload.gameflow_phase ?? "");
+            // Preserve last known draft state during game (LCU champ-select session unavailable)
+            if (nextDraftState !== null || !isInGame) {
+              setLcuDraftState(nextDraftState);
+            }
+            setGameflowPhase(gamePhase);
             if (nextPlayerRunes) {
               setPlayerRunes(nextPlayerRunes);
             }
