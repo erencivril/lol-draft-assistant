@@ -11,18 +11,17 @@ from app.providers.lolalytics_build_provider import (
     LolalyticsBuildsProvider,
     MatchupBuildData,
 )
-logger = logging.getLogger("lda.services.build_recommender")
+from app.services.recommender_shared import (
+    LANE_OPPONENT_WEIGHT, JUNGLE_WEIGHT, DEFAULT_WEIGHT,
+    MIN_GAMES_PER_MATCHUP, position_weight,
+)
 
-# Position weights for build decisions (lane opponent matters most)
-LANE_OPPONENT_WEIGHT = 4.0
-JUNGLE_WEIGHT = 2.0
-DEFAULT_WEIGHT = 1.0
+logger = logging.getLogger("lda.services.build_recommender")
 
 # Keystone coherence: items that appear in keystone-filtered builds get a small bonus
 KEYSTONE_COHERENCE_BONUS = 1.15
-
-MIN_GAMES_PER_MATCHUP = 20
 MIN_MATCHUPS_FOR_AGGREGATION = 1
+MIN_ITEM_GAMES = 10
 
 # Boot item IDs (tier 2 boots)
 BOOT_IDS: frozenset[int] = frozenset({
@@ -86,17 +85,6 @@ class BuildRecommendationResult:
     matchup_summaries: list[MatchupSummary] = field(default_factory=list)
 
 
-def _position_weight(player_role: str, opponent_role: str) -> float:
-    """Determine how much an opponent's matchup should weigh in build decisions."""
-    if player_role == opponent_role:
-        return LANE_OPPONENT_WEIGHT
-    if opponent_role == "jungle":
-        return JUNGLE_WEIGHT
-    if player_role == "jungle":
-        return JUNGLE_WEIGHT
-    return DEFAULT_WEIGHT
-
-
 def _aggregate_slot_items(
     matchup_pairs: list[tuple[dict, MatchupBuildData]],
     slot_attr: str,
@@ -110,7 +98,7 @@ def _aggregate_slot_items(
     item_scores: dict[int, dict] = {}
 
     for enemy_info, build_data in matchup_pairs:
-        weight = _position_weight(player_role, enemy_info.get("role", ""))
+        weight = position_weight(player_role, enemy_info.get("role", ""))
         opp_id = enemy_info.get("champion_id", 0)
         opponent_name = ""
         if opp_id and opp_id in champion_lookup:
@@ -121,10 +109,10 @@ def _aggregate_slot_items(
             iid = item.item_id
             if exclude_ids and iid in exclude_ids:
                 continue
-            if item.games <= 0:
+            if item.games < MIN_ITEM_GAMES:
                 continue
 
-            games_factor = min(1.0, item.games / 100)
+            games_factor = min(1.0, item.games / 200)
             score = item.win_rate * weight * games_factor * item.pick_rate
 
             # Keystone coherence bonus
@@ -217,6 +205,15 @@ async def recommend_build(
 
     Returns build recommendation with per-slot items.
     """
+    # Deduplicate roles: if multiple enemies share a role, clear the duplicate
+    seen_roles: set[str] = set()
+    for enemy in enemies:
+        role_val = enemy.get("role", "")
+        if role_val and role_val in seen_roles:
+            enemy["role"] = ""
+        if role_val:
+            seen_roles.add(role_val)
+
     matchup_results = await provider.fetch_matchup_builds(
         champion_slug=champion_slug,
         champion_id=champion_id,
@@ -254,11 +251,16 @@ async def recommend_build(
             keystone_item_set = frozenset(ks_items)
 
     matchup_pairs: list[tuple[dict, MatchupBuildData]] = []
+    specific_count = 0
     for enemy, result in zip(enemies, matchup_results):
         if result is not None and result.total_games >= MIN_GAMES_PER_MATCHUP:
             matchup_pairs.append((enemy, result))
+            specific_count += 1
+        elif general_build is not None and enemy.get("champion_id", 0):
+            # Use general build as positional fallback for low-data matchups
+            matchup_pairs.append((enemy, general_build))
 
-    fallback_used = len(matchup_pairs) < MIN_MATCHUPS_FOR_AGGREGATION
+    fallback_used = specific_count < MIN_MATCHUPS_FOR_AGGREGATION
     if fallback_used and general_build is not None:
         matchup_pairs = [
             ({"slug": "", "champion_id": 0, "role": ""}, general_build)
@@ -279,7 +281,7 @@ async def recommend_build(
         if opp_id in champion_lookup:
             opp_name = champion_lookup[opp_id].name
         opp_role = enemy_info.get("role", "")
-        weight = _position_weight(role, opp_role)
+        weight = position_weight(role, opp_role)
         matchup_summaries.append(MatchupSummary(
             opponent_name=opp_name,
             opponent_id=opp_id,

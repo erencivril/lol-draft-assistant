@@ -11,6 +11,10 @@ from app.providers.lolalytics_build_provider import (
     MatchupBuildData,
     RuneStatEntry,
 )
+from app.services.recommender_shared import (
+    LANE_OPPONENT_WEIGHT, JUNGLE_WEIGHT, DEFAULT_WEIGHT,
+    MIN_GAMES_PER_MATCHUP, position_weight,
+)
 
 logger = logging.getLogger("lda.services.rune_recommender")
 
@@ -28,12 +32,7 @@ KEYSTONE_IDS: frozenset[int] = frozenset({
     8351, 8360, 8369,
 })
 
-# Position weights: how much each enemy position matters for rune choice
-LANE_OPPONENT_WEIGHT = 3.0
-JUNGLE_WEIGHT = 1.5
-DEFAULT_WEIGHT = 1.0
-
-MIN_GAMES_PER_MATCHUP = 30
+MIN_KEYSTONE_GAMES = 30
 
 
 @dataclass(slots=True)
@@ -70,18 +69,6 @@ class RuneStatAggregated:
     pick_rate: float
 
 
-def _position_weight(player_role: str, opponent_role: str) -> float:
-    """Determine how much an opponent's matchup should weigh in rune decisions."""
-    if player_role == opponent_role:
-        return LANE_OPPONENT_WEIGHT
-    if opponent_role == "jungle":
-        return JUNGLE_WEIGHT
-    if player_role == "jungle":
-        # Junglers face everyone — weight all equally
-        return JUNGLE_WEIGHT
-    return DEFAULT_WEIGHT
-
-
 async def recommend_runes(
     *,
     provider: LolalyticsBuildsProvider,
@@ -99,6 +86,15 @@ async def recommend_runes(
 
     Returns top 3 rune page recommendations sorted by weighted score.
     """
+    # Deduplicate roles: if multiple enemies share a role, clear the duplicate
+    seen_roles: set[str] = set()
+    for enemy in enemies:
+        role_val = enemy.get("role", "")
+        if role_val and role_val in seen_roles:
+            enemy["role"] = ""
+        if role_val:
+            seen_roles.add(role_val)
+
     # Fetch vs data for each enemy + general build as fallback
     matchup_results = await provider.fetch_matchup_builds(
         champion_slug=champion_slug,
@@ -114,15 +110,18 @@ async def recommend_runes(
         tier=tier,
     )
 
-    # Pair each result with its enemy info
+    # Pair each result with its enemy info, falling back to general per-enemy
     matchup_pairs: list[tuple[dict, MatchupBuildData]] = []
+    specific_count = 0
     for enemy, result in zip(enemies, matchup_results):
         if result is not None and result.total_games >= MIN_GAMES_PER_MATCHUP:
             matchup_pairs.append((enemy, result))
+            specific_count += 1
+        elif general_build is not None and enemy.get("champion_id", 0):
+            matchup_pairs.append((enemy, general_build))
 
-    fallback_used = len(matchup_pairs) == 0
+    fallback_used = specific_count < 1
     if fallback_used and general_build is not None:
-        # Use general build as the sole data source
         matchup_pairs = [({"slug": "", "champion_id": 0, "role": ""}, general_build)]
 
     if not matchup_pairs:
@@ -133,7 +132,7 @@ async def recommend_runes(
     rune_aggregated: dict[int, dict] = {}  # rune_id -> {weighted_wr_sum, weight_sum, games}
 
     for enemy_info, build_data in matchup_pairs:
-        weight = _position_weight(role, enemy_info.get("role", ""))
+        weight = position_weight(role, enemy_info.get("role", ""))
         opponent_name = ""
         opp_id = enemy_info.get("champion_id", 0)
         if opp_id and opp_id in champion_lookup:
@@ -144,7 +143,9 @@ async def recommend_runes(
             if rune_stat.games <= 0:
                 continue
 
-            # Aggregate per-rune stats
+            games_factor = min(1.0, rune_stat.games / 200)
+
+            # Aggregate per-rune stats (all runes — unchanged)
             if rid not in rune_aggregated:
                 rune_aggregated[rid] = {"weighted_wr_sum": 0.0, "weight_sum": 0.0, "games": 0, "pr_sum": 0.0, "count": 0}
             agg = rune_aggregated[rid]
@@ -154,13 +155,18 @@ async def recommend_runes(
             agg["pr_sum"] += rune_stat.pick_rate
             agg["count"] += 1
 
-            # Aggregate keystone scores
+            # Keystone scoring (new formula: win_rate * weight * games_factor * pick_rate)
             if rid in KEYSTONE_IDS:
+                if rune_stat.games < MIN_KEYSTONE_GAMES:
+                    continue
+
+                score = rune_stat.win_rate * weight * games_factor * rune_stat.pick_rate
+
                 if rid not in keystone_scores:
                     keystone_scores[rid] = {"score": 0.0, "weight_sum": 0.0, "games": 0, "details": []}
                 ks = keystone_scores[rid]
-                ks["score"] += rune_stat.win_rate * weight * rune_stat.games
-                ks["weight_sum"] += weight * rune_stat.games
+                ks["score"] += score
+                ks["weight_sum"] += weight * games_factor * rune_stat.pick_rate
                 ks["games"] += rune_stat.games
                 if opp_id:
                     ks["details"].append(MatchupRuneDetail(

@@ -443,7 +443,7 @@ class LolalyticsBuildsProvider:
 
         normalized_tier = _normalize_tier(tier)
         if opponent_slug and opponent_role:
-            # VS page — keystone filter not supported
+            # VS page with specific opponent lane
             url = (
                 f"{LOLALYTICS_BUILD_BASE}/{champion_slug}/vs/{opponent_slug}"
                 f"/build/q-data.json?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
@@ -451,6 +451,16 @@ class LolalyticsBuildsProvider:
             referer = (
                 f"https://lolalytics.com/lol/{champion_slug}/vs/{opponent_slug}"
                 f"/build/?lane={role}&vslane={opponent_role}&tier={normalized_tier}"
+            )
+        elif opponent_slug:
+            # VS page without opponent lane filter (more data for off-meta picks)
+            url = (
+                f"{LOLALYTICS_BUILD_BASE}/{champion_slug}/vs/{opponent_slug}"
+                f"/build/q-data.json?lane={role}&tier={normalized_tier}"
+            )
+            referer = (
+                f"https://lolalytics.com/lol/{champion_slug}/vs/{opponent_slug}"
+                f"/build/?lane={role}&tier={normalized_tier}"
             )
         else:
             # General page — keystone filter supported
@@ -500,7 +510,6 @@ class LolalyticsBuildsProvider:
                 role=role,
                 opponent_slug=enemy["slug"],
                 opponent_id=enemy["champion_id"],
-                opponent_role=enemy["role"],
                 tier=tier,
             )
             for enemy in enemies
