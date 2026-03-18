@@ -267,6 +267,14 @@ export type RunePagePayload = {
   selected_perk_ids: number[];
 };
 
+export type InGamePlayer = {
+  champion_name: string;
+  summoner_name: string;
+  team: string;
+  position: string;
+  item_ids: number[];
+};
+
 export type RuneDefinition = {
   name: string;
   image_url: string;

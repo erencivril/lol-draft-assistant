@@ -59,11 +59,22 @@ struct DraftStatePayload {
 }
 
 #[derive(Clone, Serialize)]
+struct InGamePlayer {
+    champion_name: String,
+    summoner_name: String,
+    team: String,
+    position: String,
+    item_ids: Vec<i64>,
+}
+
+#[derive(Clone, Serialize)]
 pub struct LcuDraftUpdatePayload {
     connected: bool,
     status: String,
     draft_state: Option<DraftStatePayload>,
     gameflow_phase: Option<String>,
+    in_game_players: Option<Vec<InGamePlayer>>,
+    local_player_name: Option<String>,
 }
 
 /// Shared LCU credentials so Tauri commands can reach the LCU.
@@ -181,6 +192,8 @@ pub async fn run_polling(app: AppHandle) {
                 status: format!("LCU polling failed: {error}"),
                 draft_state: None,
                 gameflow_phase: None,
+                in_game_players: None,
+                local_player_name: None,
             },
         };
 
@@ -214,6 +227,8 @@ async fn poll_lcu(app: &AppHandle) -> Result<LcuDraftUpdatePayload> {
             status: "Waiting for League Client".to_string(),
             draft_state: None,
             gameflow_phase: None,
+            in_game_players: None,
+            local_player_name: None,
         });
     };
 
@@ -264,11 +279,20 @@ async fn poll_lcu(app: &AppHandle) -> Result<LcuDraftUpdatePayload> {
         } else {
             "League Client connected, waiting for champ select".to_string()
         };
+        let (in_game_players, local_player_name) = if in_game {
+            let players = fetch_live_game_players().await.ok();
+            let name = fetch_active_player_name().await.ok();
+            (players, name)
+        } else {
+            (None, None)
+        };
         return Ok(LcuDraftUpdatePayload {
             connected: true,
             status: status_msg,
             draft_state: None,
             gameflow_phase,
+            in_game_players,
+            local_player_name,
         });
     }
 
@@ -278,6 +302,8 @@ async fn poll_lcu(app: &AppHandle) -> Result<LcuDraftUpdatePayload> {
             status: format!("League Client connected ({})", session_response.status()),
             draft_state: None,
             gameflow_phase,
+            in_game_players: None,
+            local_player_name: None,
         });
     }
 
@@ -298,6 +324,8 @@ async fn poll_lcu(app: &AppHandle) -> Result<LcuDraftUpdatePayload> {
             rune_page,
         )),
         gameflow_phase,
+        in_game_players: None,
+        local_player_name: None,
     })
 }
 
@@ -359,6 +387,64 @@ async fn fetch_optional_text(
     }
 
     response.text().await.with_context(|| format!("failed to read {path} response"))
+}
+
+async fn fetch_live_game_players() -> Result<Vec<InGamePlayer>> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(2))
+        .build()?;
+
+    let resp = client
+        .get("https://127.0.0.1:2999/liveclientdata/playerlist")
+        .send()
+        .await?;
+
+    let players: Vec<Value> = resp.json().await?;
+
+    Ok(players
+        .iter()
+        .map(|p| InGamePlayer {
+            champion_name: p["championName"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            summoner_name: p["summonerName"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            team: p["team"].as_str().unwrap_or("").to_string(),
+            position: normalize_role(p["position"].as_str().unwrap_or(""))
+                .unwrap_or_default(),
+            item_ids: p["items"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|i| i["itemID"].as_i64())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+async fn fetch_active_player_name() -> Result<String> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(2))
+        .build()?;
+
+    let resp = client
+        .get("https://127.0.0.1:2999/liveclientdata/activeplayer")
+        .send()
+        .await?;
+
+    let player: Value = resp.json().await?;
+    Ok(player["summonerName"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
 }
 
 fn build_draft_state(

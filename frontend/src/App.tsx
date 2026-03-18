@@ -24,6 +24,7 @@ import { roleOptions } from "./constants/filters";
 import type {
   BuildRecommendResponse,
   DraftState,
+  InGamePlayer,
   ItemDefinition,
   RecommendationBundle,
   RuneDefinition,
@@ -43,6 +44,8 @@ type LcuDraftUpdatePayload = {
   status?: string;
   draft_state?: (DraftState & { local_player_runes?: RunePagePayload | null }) | null;
   gameflow_phase?: string | null;
+  in_game_players?: InGamePlayer[] | null;
+  local_player_name?: string | null;
 };
 
 type SlotOverride = {
@@ -411,6 +414,8 @@ export default function App() {
   });
   const [gameflowPhase, setGameflowPhase] = useState<string>("");
   const [playerRunes, setPlayerRunes] = useState<RunePagePayload | null>(null);
+  const [inGamePlayers, setInGamePlayers] = useState<InGamePlayer[] | null>(null);
+  const [localPlayerName, setLocalPlayerName] = useState<string | null>(null);
   const [runeRecommendations, setRuneRecommendations] = useState<RuneRecommendResponse | null>(null);
   const [buildRecommendation, setBuildRecommendation] = useState<BuildRecommendResponse | null>(null);
   const [runeLoading, setRuneLoading] = useState(false);
@@ -421,6 +426,10 @@ export default function App() {
   const apiBaseUrl = getApiBaseUrl();
   const championLookup = useMemo(
     () => new Map(champions.map((champion) => [champion.champion_id, champion])),
+    [champions]
+  );
+  const championNameLookup = useMemo(
+    () => new Map(champions.map((c) => [c.name, c])),
     [champions]
   );
 
@@ -503,6 +512,8 @@ export default function App() {
           const nextDraftState = rawDraft;
           const gamePhase = event.payload.gameflow_phase ?? "";
           const isInGame = ["InProgress", "GameStart", "WaitingForStats"].includes(gamePhase);
+          const nextInGamePlayers = event.payload.in_game_players ?? null;
+          const nextLocalPlayerName = event.payload.local_player_name ?? null;
           startTransition(() => {
             setLcuState({
               connected: event.payload.connected,
@@ -518,6 +529,16 @@ export default function App() {
             setGameflowPhase(gamePhase);
             if (nextPlayerRunes) {
               setPlayerRunes(nextPlayerRunes);
+            }
+            if (nextInGamePlayers && nextInGamePlayers.length > 0) {
+              setInGamePlayers(nextInGamePlayers);
+            }
+            if (nextLocalPlayerName) {
+              setLocalPlayerName(nextLocalPlayerName);
+            }
+            if (!isInGame) {
+              setInGamePlayers(null);
+              setLocalPlayerName(null);
             }
           });
         });
@@ -544,6 +565,8 @@ export default function App() {
     };
   }, []);
 
+  const inGame = gameflowPhase === "InProgress" || gameflowPhase === "GameStart";
+
   const effectiveDraftState = useMemo(() => {
     const baseDraft =
       lcuState.connected && lcuDraftState
@@ -553,7 +576,38 @@ export default function App() {
     const inferredDraft = inferDraftRoles(draftWithLocalRole, championLookup, {
       enemyManualLockOrderByCellId: enemyRoleLockOrder,
     });
-    const result = hydrateDraftState(inferredDraft, championLookup);
+    // In-game: override enemy team with Live Client Data positions
+    let draftWithRoles = inferredDraft;
+    if (inGame && inGamePlayers && inGamePlayers.length > 0 && localPlayerName) {
+      const localInGame = inGamePlayers.find((p) => p.summoner_name === localPlayerName);
+      if (localInGame) {
+        const enemyTeamId = localInGame.team === "ORDER" ? "CHAOS" : "ORDER";
+        const enemyPlayers = inGamePlayers.filter((p) => p.team === enemyTeamId);
+        if (enemyPlayers.length > 0) {
+          draftWithRoles = {
+            ...inferredDraft,
+            enemy_team_picks: enemyPlayers.map((p, idx) => {
+              const champEntry = championNameLookup.get(p.champion_name);
+              const role = p.position || null;
+              return {
+                cell_id: idx + 6,
+                champion_id: champEntry?.champion_id ?? 0,
+                champion_name: p.champion_name,
+                champion_image_url: champEntry?.image_url ?? null,
+                assigned_role: role,
+                effective_role: role,
+                role_source: "lcu" as const,
+                role_confidence: role ? 1 : 0,
+                role_candidates: role ? [{ role, confidence: 1 }] : [],
+                summoner_id: null,
+                is_local_player: false,
+              };
+            }),
+          };
+        }
+      }
+    }
+    const result = hydrateDraftState(draftWithRoles, championLookup);
     console.debug("[draft-inference]", {
       championLookupSize: championLookup.size,
       enemyRoles: result.enemy_team_picks.map((s) => ({
@@ -567,9 +621,13 @@ export default function App() {
   }, [
     banOverrides,
     championLookup,
+    championNameLookup,
     enemyRoleLockOrder,
+    inGame,
+    inGamePlayers,
     lcuDraftState,
     lcuState.connected,
+    localPlayerName,
     localRoleOverride,
     manualDraftState,
     slotOverrides,
@@ -667,9 +725,9 @@ export default function App() {
     return () => { cancelled = true; window.clearTimeout(tid); };
   }, [runeRequestFingerprint, localSlotForRunes, effectiveDraftState.enemy_team_picks]);
 
-  // Build recommendation: triggers when game is in progress or when enemy team is fully drafted
-  const inGame = gameflowPhase === "InProgress" || gameflowPhase === "GameStart";
+  // Build recommendation: triggers when game is in progress
   const buildRequestFingerprint = useMemo(() => {
+    if (!inGame) return "";
     if (!localSlotForRunes) return "";
     const enemies = effectiveDraftState.enemy_team_picks
       .filter((s) => s.champion_id > 0)
@@ -682,7 +740,7 @@ export default function App() {
       enemies,
       rank_tier: filters.rank_tier,
     });
-  }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id, filters.rank_tier]);
+  }, [inGame, localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id, filters.rank_tier]);
 
   useEffect(() => {
     if (!buildRequestFingerprint || !localSlotForRunes) {
@@ -986,7 +1044,7 @@ export default function App() {
               buildLoading={buildLoading}
               lcuConnected={lcuState.connected}
               showRuneTab={localSlotForRunes != null}
-              showBuildTab={localSlotForRunes != null && effectiveDraftState.enemy_team_picks.some((s) => s.champion_id > 0)}
+              showBuildTab={inGame && localSlotForRunes != null && effectiveDraftState.enemy_team_picks.some((s) => s.champion_id > 0)}
               onApplyRunes={handleApplyRunes}
               championLookup={championLookup}
             />
