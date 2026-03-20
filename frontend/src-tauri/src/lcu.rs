@@ -118,7 +118,7 @@ pub async fn apply_runes(
         .build()
         .map_err(|e| e.to_string())?;
 
-    // First, get current rune page ID
+    // First, get current rune page
     let current_page_url = format!(
         "https://127.0.0.1:{}/lol-perks/v1/currentpage",
         creds.port
@@ -142,10 +142,10 @@ pub async fn apply_runes(
         .await
         .map_err(|e| format!("Failed to parse current rune page: {e}"))?;
 
-    let page_id = current_page
-        .get("id")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| "Could not find current rune page ID".to_string())?;
+    let is_editable = current_page
+        .get("isEditable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // Build the update payload
     let update_payload = serde_json::json!({
@@ -154,25 +154,127 @@ pub async fn apply_runes(
         "subStyleId": request.sub_style_id,
     });
 
-    // PUT to update the current page
-    let put_url = format!(
-        "https://127.0.0.1:{}/lol-perks/v1/pages/{}",
-        creds.port, page_id
-    );
-    let put_response = client
-        .put(&put_url)
-        .basic_auth("riot", Some(creds.password.as_str()))
-        .json(&update_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to apply runes: {e}"))?;
+    if is_editable {
+        // Current page is editable — update it directly
+        let page_id = current_page
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| "Could not find current rune page ID".to_string())?;
 
-    if put_response.status().is_success() {
-        Ok("Runes applied successfully".to_string())
+        let put_url = format!(
+            "https://127.0.0.1:{}/lol-perks/v1/pages/{}",
+            creds.port, page_id
+        );
+        let put_response = client
+            .put(&put_url)
+            .basic_auth("riot", Some(creds.password.as_str()))
+            .json(&update_payload)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to apply runes: {e}"))?;
+
+        if put_response.status().is_success() {
+            Ok("Runes applied successfully".to_string())
+        } else {
+            let status = put_response.status();
+            let body = put_response.text().await.unwrap_or_default();
+            Err(format!("Failed to apply runes ({status}): {body}"))
+        }
     } else {
-        let status = put_response.status();
-        let body = put_response.text().await.unwrap_or_default();
-        Err(format!("Failed to apply runes ({status}): {body}"))
+        // Current page is a preset (not editable) — find or create an "LDA Auto" page
+        let pages_url = format!(
+            "https://127.0.0.1:{}/lol-perks/v1/pages",
+            creds.port
+        );
+        let pages_response = client
+            .get(&pages_url)
+            .basic_auth("riot", Some(creds.password.as_str()))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to list rune pages: {e}"))?;
+
+        let pages: Vec<Value> = if pages_response.status().is_success() {
+            pages_response.json().await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Look for an existing "LDA" page
+        let lda_page = pages.iter().find(|p| {
+            p.get("name")
+                .and_then(Value::as_str)
+                .map(|n| n.contains("LDA"))
+                .unwrap_or(false)
+                && p.get("isEditable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        });
+
+        if let Some(existing) = lda_page {
+            // Update existing LDA page
+            let page_id = existing
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "Could not find LDA page ID".to_string())?;
+
+            let put_url = format!(
+                "https://127.0.0.1:{}/lol-perks/v1/pages/{}",
+                creds.port, page_id
+            );
+            let put_response = client
+                .put(&put_url)
+                .basic_auth("riot", Some(creds.password.as_str()))
+                .json(&update_payload)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to update LDA rune page: {e}"))?;
+
+            if put_response.status().is_success() {
+                // Make it the current page
+                let _ = client
+                    .put(&format!(
+                        "https://127.0.0.1:{}/lol-perks/v1/currentpage",
+                        creds.port
+                    ))
+                    .basic_auth("riot", Some(creds.password.as_str()))
+                    .json(&serde_json::json!(page_id))
+                    .send()
+                    .await;
+                Ok("Runes applied successfully (updated LDA Auto page)".to_string())
+            } else {
+                let status = put_response.status();
+                let body = put_response.text().await.unwrap_or_default();
+                Err(format!("Failed to update LDA rune page ({status}): {body}"))
+            }
+        } else {
+            // Create a new "LDA Auto" page — POST auto-activates it
+            let create_payload = serde_json::json!({
+                "name": "LDA Auto",
+                "selectedPerkIds": request.selected_perk_ids,
+                "primaryStyleId": request.primary_style_id,
+                "subStyleId": request.sub_style_id,
+                "isActive": true,
+            });
+
+            let post_response = client
+                .post(&pages_url)
+                .basic_auth("riot", Some(creds.password.as_str()))
+                .json(&create_payload)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to create rune page: {e}"))?;
+
+            if post_response.status().is_success() {
+                Ok("Runes applied successfully (created LDA Auto page)".to_string())
+            } else {
+                let status = post_response.status();
+                let body = post_response.text().await.unwrap_or_default();
+                Err(format!(
+                    "Failed to create rune page ({status}): {body}. \
+                     Try deleting a custom rune page to free a slot."
+                ))
+            }
+        }
     }
 }
 

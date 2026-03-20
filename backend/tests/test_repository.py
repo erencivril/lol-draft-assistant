@@ -102,7 +102,16 @@ async def test_status_snapshot_tracks_current_patch_only_and_purges_history(repo
     assert snapshot["historical_rows"] == 3
     assert snapshot["data_patches"] == ["16.5.1"]
 
+    # Default keep_previous=True: 16.6.1 keeps 16.5 and 16.5.1 as backup
     purged = await repository.purge_stale_data(patch="16.6.1")
+    assert purged == {"tier_stats": 0, "matchups": 0, "synergies": 0}
+
+    snapshot = await repository.status_snapshot()
+    assert snapshot["historical_rows"] == 3
+    assert snapshot["data_patches"] == ["16.5.1"]
+
+    # Explicit keep_previous=False purges everything
+    purged = await repository.purge_stale_data(patch="16.6.1", keep_previous=False)
     assert purged == {"tier_stats": 1, "matchups": 1, "synergies": 1}
 
     snapshot = await repository.status_snapshot()

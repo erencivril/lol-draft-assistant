@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 from app.db.repository import ChampionRecord
 from app.providers.lolalytics_build_provider import (
+    TIER_CASCADE,
     ItemBuildEntry,
     LolalyticsBuildsProvider,
     MatchupBuildData,
+    _normalize_tier,
 )
 from app.services.recommender_shared import (
     LANE_OPPONENT_WEIGHT, JUNGLE_WEIGHT, DEFAULT_WEIGHT,
@@ -113,7 +116,8 @@ def _aggregate_slot_items(
                 continue
 
             games_factor = min(1.0, item.games / 200)
-            score = item.win_rate * weight * games_factor * item.pick_rate
+            pr_factor = math.log1p(item.pick_rate) / math.log1p(100)
+            score = item.win_rate * weight * games_factor * pr_factor
 
             # Keystone coherence bonus
             if keystone_item_set and iid in keystone_item_set:
@@ -129,7 +133,7 @@ def _aggregate_slot_items(
                 }
             agg = item_scores[iid]
             agg["score"] += score
-            agg["weight_sum"] += weight * games_factor * item.pick_rate
+            agg["weight_sum"] += weight * games_factor * pr_factor
             agg["games"] += item.games
             agg["wr_sum"] += item.win_rate * item.games
             if opp_id:
@@ -265,6 +269,24 @@ async def recommend_build(
         matchup_pairs = [
             ({"slug": "", "champion_id": 0, "role": ""}, general_build)
         ]
+
+    # Cascading fallback: if no data at all, try broader tiers
+    if not matchup_pairs:
+        normalized = _normalize_tier(tier)
+        try:
+            start_idx = TIER_CASCADE.index(normalized) + 1
+        except ValueError:
+            start_idx = 0
+        for fallback_tier in TIER_CASCADE[start_idx:]:
+            fb_general = await provider.fetch_general_build(
+                champion_slug=champion_slug, champion_id=champion_id,
+                role=role, tier=fallback_tier,
+            )
+            if fb_general and fb_general.total_games >= MIN_GAMES_PER_MATCHUP:
+                logger.info("Build cascade: %s → %s for %s", tier, fallback_tier, champion_slug)
+                matchup_pairs = [({"slug": "", "champion_id": 0, "role": ""}, fb_general)]
+                general_build = fb_general
+                break
 
     if not matchup_pairs:
         return BuildRecommendationResult(

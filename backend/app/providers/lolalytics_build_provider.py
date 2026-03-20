@@ -18,6 +18,12 @@ logger = logging.getLogger("lda.providers.lolalytics_build")
 LOLALYTICS_BUILD_BASE = "https://lolalytics.com/lol"
 CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 
+# Tier cascade: from narrowest to broadest, used for sparse data fallback
+TIER_CASCADE: list[str] = [
+    "grandmaster_plus", "diamond_plus", "emerald_plus",
+    "platinum_plus", "gold_plus", "all",
+]
+
 _TIER_MAP: dict[str, str] = {
     "iron": "all",
     "bronze": "all",
@@ -255,41 +261,53 @@ def _parse_rune_stats(objs: list, build_loader: dict) -> list[RuneStatEntry]:
     entries: list[RuneStatEntry] = []
     for rune_id_str, entry_ref in stats_obj.items():
         try:
-            rune_id = int(rune_id_str)
+            rune_id = int(rune_id_str.rstrip("f"))
         except ValueError:
             continue
 
         resolved = _deep_resolve(objs, entry_ref)
 
         # Rune stats resolve to [[pickRate, winRate, games], ...]
-        # (list of arrays, usually one entry per usage context)
-        primary: list | None = None
+        # Non-keystone runes have dual arrays: primary + secondary context.
+        # Aggregate all arrays for accurate totals.
+        arrays: list[list] = []
         if isinstance(resolved, list) and len(resolved) > 0:
-            first = resolved[0]
-            if isinstance(first, list) and len(first) >= 3:
-                primary = first
+            for item in resolved:
+                if isinstance(item, list) and len(item) >= 3:
+                    arrays.append(item)
+            # Single flat array like [pr, wr, games] (no nesting)
+            if not arrays and len(resolved) >= 3 and not isinstance(resolved[0], list):
+                arrays.append(resolved)
         elif isinstance(resolved, dict):
-            # Fallback: some formats use {"0": [pickRate, winRate, games]}
-            candidate = resolved.get("0") or resolved.get(0)
-            if isinstance(candidate, list) and len(candidate) >= 3:
-                primary = candidate
+            for key in sorted(resolved.keys(), key=str):
+                candidate = resolved[key]
+                if isinstance(candidate, list) and len(candidate) >= 3:
+                    arrays.append(candidate)
 
-        if primary is None:
+        if not arrays:
             continue
 
-        try:
-            pick_rate = float(primary[0])
-            win_rate = float(primary[1])
-            games = int(primary[2]) if isinstance(primary[2], (int, float)) else int(float(str(primary[2])))
-        except (TypeError, ValueError):
-            continue
+        total_games = 0
+        weighted_wr = 0.0
+        total_pr = 0.0
+        for arr in arrays:
+            try:
+                pr = float(arr[0])
+                wr = float(arr[1])
+                g = int(arr[2]) if isinstance(arr[2], (int, float)) else int(float(str(arr[2])))
+            except (TypeError, ValueError):
+                continue
+            if g > 0:
+                weighted_wr += wr * g
+                total_games += g
+                total_pr += pr
 
-        if games > 0:
+        if total_games > 0:
             entries.append(RuneStatEntry(
                 rune_id=rune_id,
-                pick_rate=pick_rate,
-                win_rate=win_rate,
-                games=games,
+                pick_rate=total_pr,
+                win_rate=round(weighted_wr / total_games, 4),
+                games=total_games,
             ))
     return entries
 
@@ -487,6 +505,49 @@ class LolalyticsBuildsProvider:
         self._set_cached(cache_key, result)
         return result
 
+    async def fetch_build_data_with_fallback(
+        self,
+        *,
+        champion_slug: str,
+        champion_id: int,
+        role: str,
+        opponent_slug: str | None = None,
+        opponent_id: int | None = None,
+        opponent_role: str | None = None,
+        keystone_id: int | None = None,
+        tier: str = "emerald_plus",
+        min_games: int = 50,
+    ) -> MatchupBuildData | None:
+        """Fetch build data with tier cascade fallback for sparse data."""
+        result = await self.fetch_build_data(
+            champion_slug=champion_slug, champion_id=champion_id, role=role,
+            opponent_slug=opponent_slug, opponent_id=opponent_id,
+            opponent_role=opponent_role, keystone_id=keystone_id, tier=tier,
+        )
+        if result and result.total_games >= min_games:
+            return result
+
+        normalized = _normalize_tier(tier)
+        try:
+            start_idx = TIER_CASCADE.index(normalized) + 1
+        except ValueError:
+            start_idx = 0
+
+        for fallback_tier in TIER_CASCADE[start_idx:]:
+            fallback_result = await self.fetch_build_data(
+                champion_slug=champion_slug, champion_id=champion_id, role=role,
+                opponent_slug=opponent_slug, opponent_id=opponent_id,
+                opponent_role=opponent_role, keystone_id=keystone_id, tier=fallback_tier,
+            )
+            if fallback_result and fallback_result.total_games >= min_games:
+                logger.info("Tier cascade: %s → %s for %s", tier, fallback_tier, champion_slug)
+                return fallback_result
+            # Keep last non-None result even if below min_games
+            if fallback_result is not None:
+                result = fallback_result
+
+        return result  # Best we found (may be below min_games)
+
     async def fetch_matchup_builds(
         self,
         *,
@@ -510,6 +571,7 @@ class LolalyticsBuildsProvider:
                 role=role,
                 opponent_slug=enemy["slug"],
                 opponent_id=enemy["champion_id"],
+                opponent_role=enemy.get("role") or None,
                 tier=tier,
             )
             for enemy in enemies
@@ -555,27 +617,33 @@ class LolalyticsBuildsProvider:
         opponent_id: int | None,
         opponent_role: str | None,
     ) -> MatchupBuildData | None:
-        try:
-            async with httpx.AsyncClient(
-                headers={
-                    "User-Agent": LOLALYTICS_USER_AGENT,
-                    "Accept-Language": "en-US,en;q=0.9",
-                },
-                follow_redirects=True,
-                timeout=self.settings.scrape_timeout_seconds,
-            ) as client:
-                response = await client.get(
-                    url,
+        raw = None
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(
                     headers={
-                        "Accept": "application/json,text/plain,*/*",
-                        "Referer": referer,
+                        "User-Agent": LOLALYTICS_USER_AGENT,
+                        "Accept-Language": "en-US,en;q=0.9",
                     },
-                )
-                response.raise_for_status()
-                raw = response.json()
-        except Exception as exc:
-            logger.warning("Failed to fetch q-data.json from %s: %s", url, exc)
-            return None
+                    follow_redirects=True,
+                    timeout=self.settings.scrape_timeout_seconds,
+                ) as client:
+                    response = await client.get(
+                        url,
+                        headers={
+                            "Accept": "application/json,text/plain,*/*",
+                            "Referer": referer,
+                        },
+                    )
+                    response.raise_for_status()
+                    raw = response.json()
+                    break
+            except Exception as exc:
+                if attempt == 0:
+                    await asyncio.sleep(1.5)
+                    continue
+                logger.warning("Failed to fetch q-data.json from %s: %s", url, exc)
+                return None
 
         if not isinstance(raw, dict):
             logger.warning("q-data.json response is not a dict from %s", url)

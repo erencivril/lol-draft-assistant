@@ -265,6 +265,7 @@ export type RunePagePayload = {
   primary_style_id: number;
   sub_style_id: number;
   selected_perk_ids: number[];
+  _invalid?: boolean;
 };
 
 export type InGamePlayer = {

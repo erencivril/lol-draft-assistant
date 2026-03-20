@@ -782,9 +782,25 @@ export default function App() {
       playerRunes?.selected_perk_ids,
     );
 
+    // Validate: reject pages with zero perk IDs (LCU will reject them)
+    if (runePage._invalid || runePage.selected_perk_ids.some((id) => id === 0)) {
+      setToastMessage({ text: "Cannot apply runes: incomplete rune page (missing perk data)", tone: "error" });
+      return;
+    }
+    if (!runePage.primary_style_id || !runePage.sub_style_id) {
+      setToastMessage({ text: "Cannot apply runes: missing primary or secondary tree", tone: "error" });
+      return;
+    }
+
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("apply_runes", { request: runePage });
+      setPlayerRunes({
+        keystone_id: runePage.keystone_id,
+        primary_style_id: runePage.primary_style_id,
+        sub_style_id: runePage.sub_style_id,
+        selected_perk_ids: runePage.selected_perk_ids,
+      });
       setToastMessage({ text: "Runes applied successfully!", tone: "success" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -505,15 +505,33 @@ class DatabaseRepository:
         row = await cursor.fetchone()
         return row["patch"] if row else None
 
-    async def purge_stale_data(self, *, patch: str) -> dict[str, int]:
+    async def purge_stale_data(self, *, patch: str, keep_previous: bool = True) -> dict[str, int]:
+        """Delete old patch data, optionally keeping the previous minor patch as backup."""
+        keep_patches: set[str] = {patch}
+        if keep_previous:
+            parts = patch.split(".")
+            if len(parts) >= 2:
+                try:
+                    major, minor = int(parts[0]), int(parts[1])
+                    if minor > 1:
+                        keep_patches.add(f"{major}.{minor - 1}")
+                        keep_patches.add(f"{major}.{minor - 1}.1")
+                except ValueError:
+                    pass
+
         deleted: dict[str, int] = {}
+        placeholders = ",".join("?" for _ in keep_patches)
+        params = tuple(keep_patches)
         for table_name in ("tier_stats", "matchups", "synergies"):
             cursor = await self.connection.execute(
-                f"SELECT COUNT(*) AS value FROM {table_name} WHERE patch <> ?",
-                (patch,),
+                f"SELECT COUNT(*) AS value FROM {table_name} WHERE patch NOT IN ({placeholders})",
+                params,
             )
             deleted[table_name] = int((await cursor.fetchone())["value"])
-            await self.connection.execute(f"DELETE FROM {table_name} WHERE patch <> ?", (patch,))
+            await self.connection.execute(
+                f"DELETE FROM {table_name} WHERE patch NOT IN ({placeholders})",
+                params,
+            )
         await self.connection.commit()
         return deleted
 
