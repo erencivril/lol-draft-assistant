@@ -17,6 +17,7 @@ from app.domain.roles import normalize_role_name
 from app.domain.settings import ResolvedFilters, UserSettings
 
 from .composition_analyzer import analyze_composition
+from .draft_phase import DraftPhaseContext, resolve_draft_phase
 from .explanation_builder import (
     build_ban_explanation,
     build_pick_explanation,
@@ -34,6 +35,7 @@ from .scoring import (
     compose_pick_score,
     display_band,
     evidence_score,
+    flex_pick_score,
     has_thin_evidence,
     low_sample_penalty,
     normalize_delta,
@@ -602,6 +604,7 @@ class RecommendationService:
                 settings=settings,
                 patch_trusted=patch_trusted,
                 scope_complete=scope_complete,
+                draft_state=resolved_draft_state,
             )
             for candidate in pick_candidates.values()
         ]
@@ -840,6 +843,7 @@ class RecommendationService:
         settings: UserSettings,
         patch_trusted: bool,
         scope_complete: bool,
+        draft_state: DraftState,
     ) -> PickRecommendationDraft:
         enemy_slots = [slot for slot in enemy_context.slots if slot.champion_id]
         ally_slots = [slot for slot in ally_context.slots if slot.champion_id]
@@ -890,6 +894,11 @@ class RecommendationService:
             ),
             candidate_role=candidate.role,
         )
+        # Draft phase context: scale counter importance by pick position
+        draft_phase = resolve_draft_phase(draft_state)
+        effective_counter_score = counter_summary.score * draft_phase.counter_weight_scale
+        effective_worst_enemy = counter_summary.worst_score * draft_phase.counter_weight_scale
+
         # Composition analysis
         comp_score = 0.0
         comp_weight = 0.0
@@ -916,8 +925,8 @@ class RecommendationService:
         else:
             composition = compose_pick_score(
                 record=candidate.record,
-                counter_score=counter_summary.score,
-                worst_enemy_score=counter_summary.worst_score,
+                counter_score=effective_counter_score,
+                worst_enemy_score=effective_worst_enemy,
                 counter_coverage_penalty=counter_summary.coverage_penalty,
                 tier_secondary_score=tier_secondary,
                 synergy_score=synergy_summary.score,
@@ -964,9 +973,9 @@ class RecommendationService:
             confidence = min(confidence, CONFIDENCE_CAP_INCOMPLETE_SCOPE)
         if enemy_slots:
             hierarchy_total = pick_hierarchy_score(
-                counter_band=pick_counter_band(counter_summary.score, len(enemy_slots)),
-                worst_enemy_score=counter_summary.worst_score,
-                board_counter_score=counter_summary.score,
+                counter_band=pick_counter_band(effective_counter_score, len(enemy_slots)),
+                worst_enemy_score=effective_worst_enemy,
+                board_counter_score=effective_counter_score,
                 tier_secondary_score=tier_secondary,
                 synergy_secondary_score=synergy_summary.score,
                 confidence=confidence,
@@ -992,6 +1001,18 @@ class RecommendationService:
             )
         if threat_penalty_note:
             reasons.append(threat_penalty_note)
+        # Flex pick value for early picks
+        flex_score_val = 0.0
+        if draft_phase.is_early_pick:
+            candidate_meta = self.metadata_index.get(candidate.champion_id)
+            if candidate_meta:
+                flex_count = len(candidate_meta.flex_roles) if candidate_meta.flex_roles else 1
+            else:
+                champion = self.champion_lookup.get(candidate.champion_id)
+                flex_count = len(champion.roles) if champion else 1
+            flex_score_val = flex_pick_score(flex_count, draft_phase.flex_bonus)
+        if flex_score_val > 0:
+            reasons.append(f"Flex pick value: {flex_score_val:.2f} ({flex_count} viable roles)")
         reasons.extend(insight.summary for insight in counter_summary.insights[:2])
         reasons.extend(insight.summary for insight in synergy_summary.insights[:2])
         explanation = build_pick_explanation(

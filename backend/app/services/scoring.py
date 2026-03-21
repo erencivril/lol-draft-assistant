@@ -612,6 +612,22 @@ def pick_hierarchy_score(
     return max(0.0, min(1.0, (counter_band + within_band) / (max_band + 1)))
 
 
+def flex_pick_score(flex_role_count: int, flex_bonus: float = 1.0) -> float:
+    """Score a champion's flex pick value based on viable role count.
+
+    Parameters
+    ----------
+    flex_role_count:
+        Number of roles this champion can viably play (from role_hints or flex_roles).
+    flex_bonus:
+        Multiplier from DraftPhaseContext (higher in early picks).
+    """
+    if flex_role_count <= 1:
+        return 0.0
+    base = min(1.0, (flex_role_count - 1) * 0.3)  # 2 roles=0.3, 3=0.6, 4+=0.9
+    return min(1.0, base * flex_bonus)
+
+
 def unique_notes(notes: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
