@@ -18,6 +18,7 @@ from app.domain.settings import ResolvedFilters, UserSettings
 
 from .composition_analyzer import analyze_composition
 from .draft_phase import DraftPhaseContext, resolve_draft_phase
+from .rank_weights import RankWeightProfile, get_rank_profile
 from .explanation_builder import (
     build_ban_explanation,
     build_pick_explanation,
@@ -481,6 +482,7 @@ class RecommendationService:
 
         region = normalize_region(filters.region) or filters.region
         rank_tier = normalize_rank_tier(filters.rank_tier) or filters.rank_tier
+        rank_profile = get_rank_profile(rank_tier)
         overrides = draft_role_overrides or {}
         scope_complete = self._scope_is_complete(region=region, rank_tier=rank_tier)
         patch_warning = self._patch_warning(draft_state.patch)
@@ -605,6 +607,7 @@ class RecommendationService:
                 patch_trusted=patch_trusted,
                 scope_complete=scope_complete,
                 draft_state=resolved_draft_state,
+                rank_profile=rank_profile,
             )
             for candidate in pick_candidates.values()
         ]
@@ -627,6 +630,7 @@ class RecommendationService:
                 filters=scoped_filters,
                 patch_trusted=patch_trusted,
                 scope_complete=scope_complete,
+                rank_profile=rank_profile,
             )
             current = deduped_bans.get(item.champion_id)
             if current is None or item.total_score > current.total_score:
@@ -844,6 +848,7 @@ class RecommendationService:
         patch_trusted: bool,
         scope_complete: bool,
         draft_state: DraftState,
+        rank_profile: RankWeightProfile,
     ) -> PickRecommendationDraft:
         enemy_slots = [slot for slot in enemy_context.slots if slot.champion_id]
         ally_slots = [slot for slot in ally_context.slots if slot.champion_id]
@@ -894,10 +899,10 @@ class RecommendationService:
             ),
             candidate_role=candidate.role,
         )
-        # Draft phase context: scale counter importance by pick position
+        # Draft phase context: scale counter importance by pick position and rank profile
         draft_phase = resolve_draft_phase(draft_state)
-        effective_counter_score = counter_summary.score * draft_phase.counter_weight_scale
-        effective_worst_enemy = counter_summary.worst_score * draft_phase.counter_weight_scale
+        effective_counter_score = counter_summary.score * draft_phase.counter_weight_scale * rank_profile.counter_importance
+        effective_worst_enemy = counter_summary.worst_score * draft_phase.counter_weight_scale * rank_profile.counter_importance
 
         # Composition analysis
         comp_score = 0.0
@@ -914,7 +919,7 @@ class RecommendationService:
                 from .scoring_constants import COMP_WEIGHT_PER_ALLY, COMP_WEIGHT_MAX, COMP_WEIGHT_MIN_ALLIES
                 comp_analysis = analyze_composition(ally_profiles, candidate_meta)
                 comp_score = comp_analysis.composition_total
-                comp_weight = min(COMP_WEIGHT_MAX, COMP_WEIGHT_PER_ALLY * len(ally_profiles))
+                comp_weight = min(COMP_WEIGHT_MAX, COMP_WEIGHT_PER_ALLY * len(ally_profiles)) * rank_profile.composition_importance
                 comp_warnings = comp_analysis.warnings
         ts = tier_score(candidate.record)
         rfs = role_fit_score(candidate.record)
@@ -1010,7 +1015,7 @@ class RecommendationService:
             else:
                 champion = self.champion_lookup.get(candidate.champion_id)
                 flex_count = len(champion.roles) if champion else 1
-            flex_score_val = flex_pick_score(flex_count, draft_phase.flex_bonus)
+            flex_score_val = flex_pick_score(flex_count, draft_phase.flex_bonus * rank_profile.flex_importance)
         if flex_score_val > 0:
             reasons.append(f"Flex pick value: {flex_score_val:.2f} ({flex_count} viable roles)")
         reasons.extend(insight.summary for insight in counter_summary.insights[:2])
@@ -1105,6 +1110,7 @@ class RecommendationService:
         filters: ResolvedFilters,
         patch_trusted: bool,
         scope_complete: bool,
+        rank_profile: RankWeightProfile,
     ) -> RecommendationItem:
         ally_slots = [slot for slot in ally_context.slots if slot.champion_id]
         enemy_slots = [slot for slot in enemy_context.slots if slot.champion_id]
