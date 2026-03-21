@@ -27,6 +27,7 @@ from .scoring_constants import (
     PBI_NORMALIZATION_SCALE,
     PICK_COUNTER_BAND_WINDOW,
     PICK_HIERARCHY_BOARD_COUNTER_WEIGHT,
+    PICK_HIERARCHY_COMPOSITION_WEIGHT,
     PICK_HIERARCHY_CONFIDENCE_WEIGHT,
     PICK_HIERARCHY_SYNERGY_WEIGHT,
     PICK_HIERARCHY_TIER_WEIGHT,
@@ -323,10 +324,15 @@ def compose_pick_score(
     enemy_count: int,
     ally_count: int,
     low_sample_penalty_val: float,
+    composition_score: float = 0.0,
+    composition_weight: float = 0.0,
 ) -> ScoreComposition:
     if enemy_count <= 0:
         synergy_weight = 0.12 if ally_count > 0 else 0.0
-        base_weight = max(0.0, 1.0 - synergy_weight)
+        if composition_weight > 0:
+            base_weight = max(0.0, 1.0 - synergy_weight - composition_weight)
+        else:
+            base_weight = max(0.0, 1.0 - synergy_weight)
         parts = [
             ScorePart(key="tier_rank", label="Tier base", value=tier_rank_score(record), weight=PREDRAFT_WEIGHT_TIER_RANK * base_weight),
             ScorePart(key="tier", label="Tier strength", value=tier_score(record), weight=PREDRAFT_WEIGHT_TIER * base_weight),
@@ -341,6 +347,15 @@ def compose_pick_score(
                     value=synergy_score,
                     weight=synergy_weight,
                     note="Signed normalized synergy expectation over visible allies",
+                )
+            )
+        if composition_weight > 0:
+            parts.append(
+                ScorePart(
+                    key="composition",
+                    label="Team composition",
+                    value=composition_score,
+                    weight=composition_weight,
                 )
             )
         raw_total = sum(part.weight * part.value for part in parts) - low_sample_penalty_val
@@ -384,6 +399,7 @@ def compose_pick_score(
         synergy_secondary_score=synergy_score,
         confidence=0.0,
         enemy_count=enemy_count,
+        composition_secondary_score=composition_score,
     )
     components = [
         RecommendationScoreComponent(
@@ -425,6 +441,14 @@ def compose_pick_score(
             weight=round(PICK_HIERARCHY_SYNERGY_WEIGHT, 4),
             contribution=round(PICK_HIERARCHY_SYNERGY_WEIGHT * relation_to_unit_interval(synergy_score), 4),
             note="Lightest tiebreak using normalized synergy delta",
+        ),
+        RecommendationScoreComponent(
+            key="composition",
+            label="Team composition",
+            value=round(composition_score, 4),
+            weight=round(PICK_HIERARCHY_COMPOSITION_WEIGHT, 4),
+            contribution=round(PICK_HIERARCHY_COMPOSITION_WEIGHT * composition_score, 4),
+            note="Damage balance, CC, engage, frontline fit with allies",
         ),
     ]
     if counter_coverage_penalty > 0:
@@ -574,6 +598,7 @@ def pick_hierarchy_score(
     synergy_secondary_score: float,
     confidence: float,
     enemy_count: int = 1,
+    composition_secondary_score: float = 0.0,
 ) -> float:
     max_band = max(pick_counter_band(1.0, enemy_count), 1)
     within_band = (
@@ -581,6 +606,7 @@ def pick_hierarchy_score(
         + relation_to_unit_interval(board_counter_score) * PICK_HIERARCHY_BOARD_COUNTER_WEIGHT
         + tier_secondary_score * PICK_HIERARCHY_TIER_WEIGHT
         + relation_to_unit_interval(synergy_secondary_score) * PICK_HIERARCHY_SYNERGY_WEIGHT
+        + composition_secondary_score * PICK_HIERARCHY_COMPOSITION_WEIGHT
         + confidence * PICK_HIERARCHY_CONFIDENCE_WEIGHT
     )
     return max(0.0, min(1.0, (counter_band + within_band) / (max_band + 1)))

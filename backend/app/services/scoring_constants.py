@@ -133,3 +133,19 @@ DISPLAY_BAND_SITUATIONAL: float = 45.0
 ROLE_AMBIGUITY_TOP_THRESHOLD: float = 0.55
 ROLE_AMBIGUITY_GAP_THRESHOLD: float = 0.10
 ROLE_AMBIGUITY_PENALTY: float = 0.85
+
+# --- Composition scoring ---
+COMP_WEIGHT_PER_ALLY: float = 0.05     # per-ally composition weight increment
+COMP_WEIGHT_MAX: float = 0.20          # max composition contribution to total
+COMP_WEIGHT_MIN_ALLIES: int = 1        # minimum allies needed before composition kicks in
+
+# Composition sub-weights (used inside composition_analyzer, exported for transparency)
+COMP_DAMAGE_BALANCE_W: float = 0.35
+COMP_CC_W: float = 0.15
+COMP_ENGAGE_W: float = 0.15
+COMP_FRONTLINE_W: float = 0.15
+COMP_DISENGAGE_W: float = 0.10
+COMP_COHERENCE_W: float = 0.10
+
+# In-draft hierarchy: composition weight at same level as synergy
+PICK_HIERARCHY_COMPOSITION_WEIGHT: float = 0.0625

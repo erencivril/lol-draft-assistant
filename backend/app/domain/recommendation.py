@@ -60,6 +60,8 @@ class RecommendationItem(BaseModel):
     sample_confidence: float = 1.0
     thin_evidence: bool = False
     confidence: float
+    composition_score: float = 0.0
+    composition_warnings: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     explanation: RecommendationExplanation = Field(default_factory=RecommendationExplanation)
 
@@ -78,6 +80,8 @@ class RecommendationBundle(BaseModel):
     scope_last_synced_at: str | None = None
     scope_freshness: str = "unknown"
     fallback_used_recently: bool = False
+    team_damage_profile: dict[str, float] | None = None
+    team_composition_warnings: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

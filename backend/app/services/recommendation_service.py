@@ -8,6 +8,7 @@ import logging
 import sqlite3
 
 from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord, SynergyRecord, TierStatRecord
+from app.domain.champion_metadata import ChampionCompositionProfile
 from app.domain.draft import DraftState, RoleCandidate, TeamSlot
 from app.domain.recommendation import RecommendationBundle, RecommendationItem, RecommendationScoreComponent
 from app.domain.ranks import normalize_rank_tier
@@ -15,6 +16,7 @@ from app.domain.regions import normalize_region
 from app.domain.roles import normalize_role_name
 from app.domain.settings import ResolvedFilters, UserSettings
 
+from .composition_analyzer import analyze_composition
 from .explanation_builder import (
     build_ban_explanation,
     build_pick_explanation,
@@ -84,6 +86,7 @@ class IndexSnapshot:
     tier_scope_index: dict[tuple[str, str, str], list[TierStatRecord]]
     matchup_index: dict[tuple[str, str, str, str, int, int], MatchupRecord]
     synergy_index: dict[tuple[str, str, str, str, int, int], SynergyRecord]
+    metadata_index: dict[int, ChampionCompositionProfile]
 
 
 @dataclass(slots=True)
@@ -125,6 +128,7 @@ class RecommendationService:
         self.tier_scope_index: dict[tuple[str, str, str], list[TierStatRecord]] = defaultdict(list)
         self.matchup_index: dict[tuple[str, str, str, str, int, int], MatchupRecord] = {}
         self.synergy_index: dict[tuple[str, str, str, str, int, int], SynergyRecord] = {}
+        self.metadata_index: dict[int, ChampionCompositionProfile] = {}
         self._rebuild_lock = asyncio.Lock()
         self._rebuild_task: asyncio.Task[None] | None = None
         self._champion_lookup_lock = asyncio.Lock()
@@ -147,6 +151,7 @@ class RecommendationService:
             self.tier_scope_index = snapshot.tier_scope_index
             self.matchup_index = snapshot.matchup_index
             self.synergy_index = snapshot.synergy_index
+            self.metadata_index = snapshot.metadata_index
 
             if not snapshot.patch:
                 self._indexes_ready = True
@@ -312,6 +317,8 @@ class RecommendationService:
                 key = (record.region, record.rank_tier, record.role, record.teammate_role, record.champion_id, record.teammate_id)
                 synergy_index[key] = record
 
+        metadata_index = await self.repository.load_all_champion_metadata()
+
         return IndexSnapshot(
             patch=patch,
             champion_lookup=champion_lookup,
@@ -319,6 +326,7 @@ class RecommendationService:
             tier_scope_index=tier_scope_index,
             matchup_index=matchup_index,
             synergy_index=synergy_index,
+            metadata_index=metadata_index,
         )
 
     def _load_index_snapshot_sync(self, database_path: str) -> IndexSnapshot:
@@ -344,6 +352,31 @@ class RecommendationService:
                     patch=row["patch"],
                 )
 
+            metadata_index: dict[int, ChampionCompositionProfile] = {}
+            try:
+                for row in connection.execute("SELECT * FROM champion_metadata"):
+                    import json as _json
+                    metadata_index[row["champion_id"]] = ChampionCompositionProfile(
+                        champion_id=row["champion_id"],
+                        damage_physical_pct=row["damage_physical_pct"],
+                        damage_magic_pct=row["damage_magic_pct"],
+                        damage_true_pct=row["damage_true_pct"],
+                        cc_hard_seconds=row["cc_hard_seconds"],
+                        cc_soft_seconds=row["cc_soft_seconds"],
+                        engage_score=row["engage_score"],
+                        disengage_score=row["disengage_score"],
+                        frontline_score=row["frontline_score"],
+                        poke_score=row["poke_score"],
+                        split_score=row["split_score"],
+                        teamfight_score=row["teamfight_score"],
+                        protect_score=row["protect_score"],
+                        scaling=row["scaling"],
+                        flex_roles=_json.loads(row["flex_roles_json"]),
+                        tags=_json.loads(row["tags_json"]),
+                    )
+            except sqlite3.OperationalError:
+                pass  # champion_metadata table may not exist yet
+
             if not patch:
                 return IndexSnapshot(
                     patch=None,
@@ -352,6 +385,7 @@ class RecommendationService:
                     tier_scope_index=tier_scope_index,
                     matchup_index=matchup_index,
                     synergy_index=synergy_index,
+                    metadata_index=metadata_index,
                 )
 
             for row in connection.execute("SELECT * FROM tier_stats WHERE patch = ?", (patch,)):
@@ -376,6 +410,7 @@ class RecommendationService:
                 tier_scope_index=tier_scope_index,
                 matchup_index=matchup_index,
                 synergy_index=synergy_index,
+                metadata_index=metadata_index,
             )
         finally:
             connection.close()
@@ -631,6 +666,20 @@ class RecommendationService:
         if any(item.thin_evidence for item in top_items):
             warnings.append("Some top recommendations rely on low-sample matchup and synergy edges, so their total scores were reduced.")
 
+        # Team damage profile for bundle
+        team_damage_profile = None
+        team_comp_warnings: list[str] = []
+        picked_ally_ids = [slot.champion_id for slot in ally_context.slots if slot.champion_id]
+        if picked_ally_ids and self.metadata_index:
+            picked_profiles = [self.metadata_index[cid] for cid in picked_ally_ids if cid in self.metadata_index]
+            if picked_profiles:
+                from statistics import mean
+                team_damage_profile = {
+                    "physical": round(mean(p.damage_physical_pct for p in picked_profiles), 2),
+                    "magic": round(mean(p.damage_magic_pct for p in picked_profiles), 2),
+                    "true": round(mean(p.damage_true_pct for p in picked_profiles), 2),
+                }
+
         bundle = RecommendationBundle(
             picks=picks[: settings.top_n],
             bans=bans[: settings.top_n],
@@ -645,6 +694,8 @@ class RecommendationService:
             scope_last_synced_at=scope_runtime["scope_last_synced_at"],
             scope_freshness=scope_runtime["scope_freshness"],
             fallback_used_recently=scope_runtime["fallback_used_recently"],
+            team_damage_profile=team_damage_profile,
+            team_composition_warnings=team_comp_warnings,
             warnings=warnings,
         )
         return RecommendationRuntimeSnapshot(draft_state=resolved_draft_state, recommendations=bundle)
@@ -836,6 +887,23 @@ class RecommendationService:
             ),
             candidate_role=candidate.role,
         )
+        # Composition analysis
+        comp_score = 0.0
+        comp_weight = 0.0
+        comp_warnings: list[str] = []
+        if ally_slots and self.metadata_index:
+            ally_profiles = [
+                self.metadata_index[slot.champion_id]
+                for slot in ally_slots
+                if slot.champion_id in self.metadata_index
+            ]
+            candidate_meta = self.metadata_index.get(candidate.champion_id)
+            if ally_profiles and candidate_meta:
+                from .scoring_constants import COMP_WEIGHT_PER_ALLY, COMP_WEIGHT_MAX, COMP_WEIGHT_MIN_ALLIES
+                comp_analysis = analyze_composition(ally_profiles, candidate_meta)
+                comp_score = comp_analysis.composition_total
+                comp_weight = min(COMP_WEIGHT_MAX, COMP_WEIGHT_PER_ALLY * len(ally_profiles))
+                comp_warnings = comp_analysis.warnings
         ts = tier_score(candidate.record)
         rfs = role_fit_score(candidate.record)
         tier_secondary = compose_predraft_pick_score(candidate.record).total
@@ -853,6 +921,8 @@ class RecommendationService:
                 enemy_count=len(enemy_slots),
                 ally_count=len(ally_slots),
                 low_sample_penalty_val=low_sample_penalty_val,
+                composition_score=comp_score,
+                composition_weight=comp_weight,
             )
         thin = has_thin_evidence(counter_summary, synergy_summary)
         threat_penalty, blocked_by = self._pick_threat_guardrail(counter_summary=counter_summary)
@@ -898,6 +968,7 @@ class RecommendationService:
                 synergy_secondary_score=synergy_summary.score,
                 confidence=confidence,
                 enemy_count=len(enemy_slots),
+                composition_secondary_score=comp_score,
             )
             total = max(
                 0.0,
@@ -935,6 +1006,7 @@ class RecommendationService:
             matchup_coverage=round(counter_summary.coverage, 4), synergy_coverage=round(synergy_summary.coverage, 4),
             evidence_score=round(ev_score, 4), role_certainty=round(rc, 4),
             sample_confidence=round(sc, 4), thin_evidence=thin, confidence=round(confidence, 4),
+            composition_score=round(comp_score, 4), composition_warnings=comp_warnings,
             reasons=reasons, explanation=explanation,
         )
         return PickRecommendationDraft(
