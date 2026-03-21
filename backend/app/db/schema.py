@@ -173,6 +173,27 @@ CREATE TABLE IF NOT EXISTS bridge_sessions (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS champion_metadata (
+    champion_id INTEGER PRIMARY KEY,
+    damage_physical_pct REAL NOT NULL DEFAULT 0.5,
+    damage_magic_pct REAL NOT NULL DEFAULT 0.4,
+    damage_true_pct REAL NOT NULL DEFAULT 0.1,
+    cc_hard_seconds REAL NOT NULL DEFAULT 0.0,
+    cc_soft_seconds REAL NOT NULL DEFAULT 0.0,
+    engage_score REAL NOT NULL DEFAULT 0.3,
+    disengage_score REAL NOT NULL DEFAULT 0.3,
+    frontline_score REAL NOT NULL DEFAULT 0.3,
+    poke_score REAL NOT NULL DEFAULT 0.3,
+    split_score REAL NOT NULL DEFAULT 0.3,
+    teamfight_score REAL NOT NULL DEFAULT 0.5,
+    protect_score REAL NOT NULL DEFAULT 0.3,
+    scaling REAL NOT NULL DEFAULT 0.5,
+    flex_roles_json TEXT NOT NULL DEFAULT '[]',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    patch TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tier_stats_lookup ON tier_stats (region, rank_tier, role, patch, champion_id);
 CREATE INDEX IF NOT EXISTS idx_matchups_lookup ON matchups (region, rank_tier, role, patch, champion_id, opponent_id);
 CREATE INDEX IF NOT EXISTS idx_synergies_lookup ON synergies (region, rank_tier, role, patch, champion_id, teammate_id);

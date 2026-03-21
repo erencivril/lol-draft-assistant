@@ -8,6 +8,7 @@ from typing import Any
 import aiosqlite
 
 from app.db.schema import SCHEMA_SQL
+from app.domain.champion_metadata import ChampionCompositionProfile
 from app.domain.settings import UserSettings
 
 
@@ -323,6 +324,86 @@ class DatabaseRepository:
             )
             for row in rows
         }
+
+    async def load_all_champion_metadata(self) -> dict[int, ChampionCompositionProfile]:
+        cursor = await self.connection.execute("SELECT * FROM champion_metadata")
+        rows = await cursor.fetchall()
+        return {
+            row["champion_id"]: ChampionCompositionProfile(
+                champion_id=row["champion_id"],
+                damage_physical_pct=row["damage_physical_pct"],
+                damage_magic_pct=row["damage_magic_pct"],
+                damage_true_pct=row["damage_true_pct"],
+                cc_hard_seconds=row["cc_hard_seconds"],
+                cc_soft_seconds=row["cc_soft_seconds"],
+                engage_score=row["engage_score"],
+                disengage_score=row["disengage_score"],
+                frontline_score=row["frontline_score"],
+                poke_score=row["poke_score"],
+                split_score=row["split_score"],
+                teamfight_score=row["teamfight_score"],
+                protect_score=row["protect_score"],
+                scaling=row["scaling"],
+                flex_roles=json.loads(row["flex_roles_json"]),
+                tags=json.loads(row["tags_json"]),
+            )
+            for row in rows
+        }
+
+    async def upsert_champion_metadata(self, profiles: list[ChampionCompositionProfile], patch: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        await self.connection.executemany(
+            """
+            INSERT INTO champion_metadata (
+                champion_id, damage_physical_pct, damage_magic_pct, damage_true_pct,
+                cc_hard_seconds, cc_soft_seconds, engage_score, disengage_score,
+                frontline_score, poke_score, split_score, teamfight_score,
+                protect_score, scaling, flex_roles_json, tags_json, patch, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(champion_id) DO UPDATE SET
+                damage_physical_pct = excluded.damage_physical_pct,
+                damage_magic_pct = excluded.damage_magic_pct,
+                damage_true_pct = excluded.damage_true_pct,
+                cc_hard_seconds = excluded.cc_hard_seconds,
+                cc_soft_seconds = excluded.cc_soft_seconds,
+                engage_score = excluded.engage_score,
+                disengage_score = excluded.disengage_score,
+                frontline_score = excluded.frontline_score,
+                poke_score = excluded.poke_score,
+                split_score = excluded.split_score,
+                teamfight_score = excluded.teamfight_score,
+                protect_score = excluded.protect_score,
+                scaling = excluded.scaling,
+                flex_roles_json = excluded.flex_roles_json,
+                tags_json = excluded.tags_json,
+                patch = excluded.patch,
+                updated_at = excluded.updated_at
+            """,
+            [
+                (
+                    p.champion_id,
+                    p.damage_physical_pct,
+                    p.damage_magic_pct,
+                    p.damage_true_pct,
+                    p.cc_hard_seconds,
+                    p.cc_soft_seconds,
+                    p.engage_score,
+                    p.disengage_score,
+                    p.frontline_score,
+                    p.poke_score,
+                    p.split_score,
+                    p.teamfight_score,
+                    p.protect_score,
+                    p.scaling,
+                    json.dumps(p.flex_roles),
+                    json.dumps(p.tags),
+                    patch,
+                    now,
+                )
+                for p in profiles
+            ],
+        )
+        await self.connection.commit()
 
     async def replace_tier_stats(self, *, region: str, rank_tier: str, role: str, patch: str, records: list[TierStatRecord]) -> None:
         await self.connection.execute(
