@@ -11,7 +11,7 @@ from app.db.repository import ChampionRecord, DatabaseRepository, MatchupRecord,
 from app.domain.champion_metadata import ChampionCompositionProfile
 from app.domain.draft import DraftState, RoleCandidate, TeamSlot
 from app.domain.recommendation import RecommendationBundle, RecommendationItem, RecommendationScoreComponent
-from app.domain.ranks import normalize_rank_tier
+from app.domain.ranks import adjacent_ranks, normalize_rank_tier
 from app.domain.regions import normalize_region
 from app.domain.roles import normalize_role_name
 from app.domain.settings import ResolvedFilters, UserSettings
@@ -67,6 +67,9 @@ from .scoring_constants import (
     PICK_DIRECT_THREAT_GUARDRAIL_CAP,
     PICK_DIRECT_THREAT_GUARDRAIL_FLOOR,
     PICK_DIRECT_THREAT_GUARDRAIL_SCALE,
+    SAMPLE_THRESHOLD_IGNORE,
+    SPARSE_ADJACENT_RANK_DISCOUNT,
+    SPARSE_AGGREGATE_RANK_DISCOUNT,
     SUPPORTED_ROLES,
     THIN_EVIDENCE_MULTIPLIER,
 )
@@ -998,6 +1001,19 @@ class RecommendationService:
         )
         if threat_penalty_note:
             explanation.penalties.insert(0, threat_penalty_note)
+        min_games = candidate.record.games
+        if counter_summary.top_games is not None:
+            min_games = min(min_games, counter_summary.top_games)
+        if synergy_summary.top_games is not None:
+            min_games = min(min_games, synergy_summary.top_games)
+        if min_games >= 500:
+            data_quality = "high"
+        elif min_games >= 100:
+            data_quality = "medium"
+        elif min_games >= 25:
+            data_quality = "low"
+        else:
+            data_quality = "sparse"
         item = RecommendationItem(
             champion_id=candidate.champion_id, champion_name=champion_name_val,
             suggested_role=candidate.role, total_score=round(total * 100, 2), display_band=display_band(total * 100),
@@ -1006,6 +1022,7 @@ class RecommendationService:
             matchup_coverage=round(counter_summary.coverage, 4), synergy_coverage=round(synergy_summary.coverage, 4),
             evidence_score=round(ev_score, 4), role_certainty=round(rc, 4),
             sample_confidence=round(sc, 4), thin_evidence=thin, confidence=round(confidence, 4),
+            data_quality=data_quality,
             composition_score=round(comp_score, 4), composition_warnings=comp_warnings,
             reasons=reasons, explanation=explanation,
         )
@@ -1154,6 +1171,19 @@ class RecommendationService:
             composition=composition, counter_summary=counter_summary, synergy_summary=synergy_summary,
             scenario_summary=combined_scenario_summary(enemy_context, ally_context), thin_evidence=thin,
         )
+        min_games = candidate.record.games
+        if counter_summary.top_games is not None:
+            min_games = min(min_games, counter_summary.top_games)
+        if synergy_summary.top_games is not None:
+            min_games = min(min_games, synergy_summary.top_games)
+        if min_games >= 500:
+            data_quality = "high"
+        elif min_games >= 100:
+            data_quality = "medium"
+        elif min_games >= 25:
+            data_quality = "low"
+        else:
+            data_quality = "sparse"
         return RecommendationItem(
             champion_id=candidate.champion_id, champion_name=champion_name_val,
             suggested_role=candidate.role, total_score=round(total * 100, 2), display_band=display_band(total * 100),
@@ -1162,6 +1192,7 @@ class RecommendationService:
             matchup_coverage=round(counter_summary.coverage, 4), synergy_coverage=round(synergy_summary.coverage, 4),
             evidence_score=round(ev_score, 4), role_certainty=round(rc, 4),
             sample_confidence=round(sc, 4), thin_evidence=thin, confidence=round(confidence, 4),
+            data_quality=data_quality,
             reasons=reasons, explanation=explanation,
         )
 
@@ -1203,7 +1234,53 @@ class RecommendationService:
         slot: TeamSlot,
         matched_role: str,
     ) -> MatchupRecord | None:
-        return self.matchup_index.get((region, rank_tier, role, matched_role, champion_id, slot.champion_id))
+        # 1. Exact match
+        record = self.matchup_index.get((region, rank_tier, role, matched_role, champion_id, slot.champion_id))
+        if record and record.games >= SAMPLE_THRESHOLD_IGNORE:
+            return record
+
+        # 2. Adjacent rank fallback
+        for adj_rank in adjacent_ranks(rank_tier):
+            adj = self.matchup_index.get((region, adj_rank, role, matched_role, champion_id, slot.champion_id))
+            if adj and adj.games >= SAMPLE_THRESHOLD_IGNORE:
+                return MatchupRecord(
+                    champion_id=adj.champion_id,
+                    opponent_id=adj.opponent_id,
+                    region=adj.region,
+                    rank_tier=adj.rank_tier,
+                    role=adj.role,
+                    opponent_role=adj.opponent_role,
+                    win_rate=adj.win_rate,
+                    delta1=adj.delta1,
+                    delta2=adj.delta2,
+                    games=int(adj.games * SPARSE_ADJACENT_RANK_DISCOUNT),
+                    patch=adj.patch,
+                    source=adj.source,
+                    fetched_at=adj.fetched_at,
+                )
+
+        # 3. Aggregate rank fallback ("all")
+        if rank_tier != "all":
+            agg = self.matchup_index.get((region, "all", role, matched_role, champion_id, slot.champion_id))
+            if agg and agg.games >= SAMPLE_THRESHOLD_IGNORE:
+                return MatchupRecord(
+                    champion_id=agg.champion_id,
+                    opponent_id=agg.opponent_id,
+                    region=agg.region,
+                    rank_tier=agg.rank_tier,
+                    role=agg.role,
+                    opponent_role=agg.opponent_role,
+                    win_rate=agg.win_rate,
+                    delta1=agg.delta1,
+                    delta2=agg.delta2,
+                    games=int(agg.games * SPARSE_AGGREGATE_RANK_DISCOUNT),
+                    patch=agg.patch,
+                    source=agg.source,
+                    fetched_at=agg.fetched_at,
+                )
+
+        # 4. Return original thin record (shrinkage will handle it)
+        return record
 
     def _lookup_synergy(
         self,

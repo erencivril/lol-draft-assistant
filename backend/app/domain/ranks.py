@@ -47,6 +47,28 @@ def normalize_rank_tier(value: str | None) -> str | None:
     return normalized if normalized in SUPPORTED_RANKS else normalized
 
 
+RANK_ADJACENCY: dict[str, list[str]] = {
+    "iron": ["bronze"],
+    "bronze": ["iron", "silver"],
+    "silver": ["bronze", "gold"],
+    "gold": ["silver", "platinum"],
+    "platinum": ["gold", "emerald"],
+    "emerald": ["platinum", "diamond"],
+    "diamond": ["emerald", "master"],
+    "master": ["diamond", "grandmaster"],
+    "grandmaster": ["master", "challenger"],
+    "challenger": ["grandmaster"],
+}
+
+
+def adjacent_ranks(rank_tier: str) -> list[str]:
+    """Return adjacent rank tiers for fallback lookups."""
+    normalized = normalize_rank_tier(rank_tier)
+    if not normalized:
+        return []
+    return RANK_ADJACENCY.get(normalized, [])
+
+
 def rank_display_name(rank_tier: str) -> str:
     normalized = normalize_rank_tier(rank_tier) or rank_tier
     return RANK_DISPLAY_NAMES.get(normalized, normalized.replace("_", " ").title())

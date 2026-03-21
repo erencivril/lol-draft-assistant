@@ -60,6 +60,7 @@ class RecommendationItem(BaseModel):
     sample_confidence: float = 1.0
     thin_evidence: bool = False
     confidence: float
+    data_quality: Literal["high", "medium", "low", "sparse"] = "medium"
     composition_score: float = 0.0
     composition_warnings: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)

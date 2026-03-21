@@ -149,3 +149,7 @@ COMP_COHERENCE_W: float = 0.10
 
 # In-draft hierarchy: composition weight at same level as synergy
 PICK_HIERARCHY_COMPOSITION_WEIGHT: float = 0.0625
+
+# --- Sparse data fallback ---
+SPARSE_ADJACENT_RANK_DISCOUNT: float = 0.85   # confidence discount for adjacent rank data
+SPARSE_AGGREGATE_RANK_DISCOUNT: float = 0.75   # confidence discount for aggregate rank data
