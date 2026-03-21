@@ -56,6 +56,9 @@ export type RecommendationItem = {
   sample_confidence: number;
   thin_evidence: boolean;
   confidence: number;
+  composition_score: number;
+  composition_warnings: string[];
+  data_quality: "high" | "medium" | "low" | "sparse";
   reasons: string[];
   explanation: RecommendationExplanation;
 };
@@ -74,6 +77,8 @@ export type RecommendationBundle = {
   scope_last_synced_at?: string | null;
   scope_freshness: string;
   fallback_used_recently: boolean;
+  team_damage_profile?: { physical: number; magic: number; true: number } | null;
+  team_composition_warnings: string[];
   warnings: string[];
   generated_at: string;
 };

@@ -99,6 +99,11 @@ function RecommendationCard({ item, rank, isBan }: { item: RecommendationItem; r
             {item.thin_evidence ? (
               <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">thin evidence</span>
             ) : null}
+            {item.data_quality === "sparse" ? (
+              <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-400">sparse data</span>
+            ) : item.data_quality === "low" ? (
+              <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">low data</span>
+            ) : null}
           </div>
 
           <div className="mt-2 flex items-center gap-2">
@@ -116,6 +121,16 @@ function RecommendationCard({ item, rank, isBan }: { item: RecommendationItem; r
           <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
             {item.explanation.summary || item.reasons.join(" · ")}
           </p>
+
+          {item.composition_warnings && item.composition_warnings.length > 0 ? (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {item.composition_warnings.map((w) => (
+                <span key={w} className="rounded bg-orange-500/15 px-2 py-0.5 text-[10px] font-medium text-orange-400">
+                  {w}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           <button
             type="button"
@@ -284,6 +299,43 @@ export function RecommendationPanel({
           <TrustDots bundle={bundle} />
         </div>
       </div>
+
+      {bundle.team_damage_profile && (activeTab === "picks" || activeTab === "bans") ? (
+        <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Team Damage Profile</span>
+            {bundle.team_composition_warnings && bundle.team_composition_warnings.length > 0 ? (
+              <div className="flex gap-1">
+                {bundle.team_composition_warnings.map((w) => (
+                  <span key={w} className="rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-medium text-orange-400">{w}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full">
+            <div
+              className="bg-red-500 transition-all"
+              style={{ width: `${(bundle.team_damage_profile.physical * 100).toFixed(0)}%` }}
+              title={`Physical: ${(bundle.team_damage_profile.physical * 100).toFixed(0)}%`}
+            />
+            <div
+              className="bg-blue-500 transition-all"
+              style={{ width: `${(bundle.team_damage_profile.magic * 100).toFixed(0)}%` }}
+              title={`Magic: ${(bundle.team_damage_profile.magic * 100).toFixed(0)}%`}
+            />
+            <div
+              className="bg-zinc-400 transition-all"
+              style={{ width: `${((bundle.team_damage_profile["true"] ?? 0) * 100).toFixed(0)}%` }}
+              title={`True: ${((bundle.team_damage_profile["true"] ?? 0) * 100).toFixed(0)}%`}
+            />
+          </div>
+          <div className="mt-1 flex justify-between text-[10px] text-zinc-500">
+            <span className="text-red-400">Physical {(bundle.team_damage_profile.physical * 100).toFixed(0)}%</span>
+            <span className="text-blue-400">Magic {(bundle.team_damage_profile.magic * 100).toFixed(0)}%</span>
+            <span className="text-zinc-400">True {((bundle.team_damage_profile["true"] ?? 0) * 100).toFixed(0)}%</span>
+          </div>
+        </div>
+      ) : null}
 
       {activeTab === "runes" ? (
         <RunePanel
