@@ -218,6 +218,7 @@ export type RuneRecommendResponse = {
   rune_pages: RunePageRecommendation[];
   per_rune_stats: RuneStatOut[];
   fallback_used: boolean;
+  summoner_spells: SpellRecommendation[];
 };
 
 export type MatchupSummary = {
@@ -252,12 +253,42 @@ export type BuildSlot = {
   alternatives: ItemRecommendation[];
 };
 
+export type SpellRecommendation = {
+  spell1_id: number;
+  spell2_id: number;
+  weighted_score: number;
+  total_games: number;
+  avg_win_rate: number;
+  pick_rate: number;
+};
+
+export type SkillEarlyLevel = {
+  level: number;
+  best_ability: string;
+  win_rate: number;
+  pick_rate: number;
+  games: number;
+  alternatives: Array<{ ability: string; wr: number; pr: number; games: number }>;
+};
+
+export type SkillPathRecommendation = {
+  through_level: number;
+  sequence: string;
+  abilities: string[];
+  weighted_score: number;
+  total_games: number;
+  avg_win_rate: number;
+};
+
 export type BuildRecommendResponse = {
   slots: BuildSlot[];
   skill_order: string | null;
   keystone_used: number | null;
   fallback_used: boolean;
   matchup_summaries: MatchupSummary[];
+  summoner_spells: SpellRecommendation[];
+  skill_early: SkillEarlyLevel[];
+  skill_paths: SkillPathRecommendation[];
 };
 
 export type RunePagePayload = {

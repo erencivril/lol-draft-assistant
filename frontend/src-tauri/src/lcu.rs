@@ -279,6 +279,59 @@ pub async fn apply_runes(
 }
 
 // ---------------------------------------------------------------------------
+// Tauri command: apply summoner spells via LCU
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ApplySpellsRequest {
+    pub spell1_id: i64,
+    pub spell2_id: i64,
+}
+
+#[tauri::command]
+pub async fn apply_summoner_spells(
+    request: ApplySpellsRequest,
+    credentials_state: State<'_, LcuCredentialsState>,
+) -> std::result::Result<String, String> {
+    let creds = {
+        let guard = credentials_state.0.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or_else(|| "LCU not connected".to_string())?
+    };
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "https://127.0.0.1:{}/lol-champ-select/v1/session/my-selection",
+        creds.port
+    );
+
+    let payload = serde_json::json!({
+        "spell1Id": request.spell1_id,
+        "spell2Id": request.spell2_id,
+    });
+
+    let response = client
+        .patch(&url)
+        .basic_auth("riot", Some(creds.password.as_str()))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to apply summoner spells: {e}"))?;
+
+    if response.status().is_success() {
+        Ok("Summoner spells applied successfully".to_string())
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("Failed to apply summoner spells ({status}): {body}"))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Polling loop
 // ---------------------------------------------------------------------------
 

@@ -211,6 +211,7 @@ class RuneRecommendResponse(BaseModel):
     rune_pages: list[RunePageOut]
     per_rune_stats: list[RuneStatOut]
     fallback_used: bool
+    summoner_spells: list[SpellRecommendationOut] = []
 
 
 class BuildRecommendRequest(BaseModel):
@@ -258,12 +259,42 @@ class BuildSlotOut(BaseModel):
     alternatives: list[ItemOut]
 
 
+class SpellRecommendationOut(BaseModel):
+    spell1_id: int
+    spell2_id: int
+    weighted_score: float
+    total_games: int
+    avg_win_rate: float
+    pick_rate: float
+
+
+class SkillEarlyOut(BaseModel):
+    level: int
+    best_ability: str
+    win_rate: float
+    pick_rate: float
+    games: int
+    alternatives: list[dict]
+
+
+class SkillPathOut(BaseModel):
+    through_level: int
+    sequence: str
+    abilities: list[str]
+    weighted_score: float
+    total_games: int
+    avg_win_rate: float
+
+
 class BuildRecommendResponse(BaseModel):
     slots: list[BuildSlotOut]
     skill_order: str | None = None
     keystone_used: int | None = None
     fallback_used: bool
     matchup_summaries: list[MatchupSummaryOut] = []
+    summoner_spells: list[SpellRecommendationOut] = []
+    skill_early: list[SkillEarlyOut] = []
+    skill_paths: list[SkillPathOut] = []
 
 
 async def _prepare_enemies(
@@ -339,6 +370,14 @@ async def recommend_runes_endpoint(
             for s in result.per_rune_stats
         ],
         fallback_used=result.fallback_used,
+        summoner_spells=[
+            SpellRecommendationOut(
+                spell1_id=sp.spell1_id, spell2_id=sp.spell2_id,
+                weighted_score=sp.weighted_score, total_games=sp.total_games,
+                avg_win_rate=sp.avg_win_rate, pick_rate=sp.pick_rate,
+            )
+            for sp in result.summoner_spells
+        ],
     )
 
 
@@ -410,5 +449,29 @@ async def recommend_build_endpoint(
                 position_weight=m.position_weight,
             )
             for m in result.matchup_summaries
+        ],
+        summoner_spells=[
+            SpellRecommendationOut(
+                spell1_id=sp.spell1_id, spell2_id=sp.spell2_id,
+                weighted_score=sp.weighted_score, total_games=sp.total_games,
+                avg_win_rate=sp.avg_win_rate, pick_rate=sp.pick_rate,
+            )
+            for sp in result.summoner_spells
+        ],
+        skill_early=[
+            SkillEarlyOut(
+                level=se.level, best_ability=se.best_ability,
+                win_rate=se.win_rate, pick_rate=se.pick_rate,
+                games=se.games, alternatives=se.alternatives,
+            )
+            for se in result.skill_early
+        ],
+        skill_paths=[
+            SkillPathOut(
+                through_level=sp.through_level, sequence=sp.sequence,
+                abilities=sp.abilities, weighted_score=sp.weighted_score,
+                total_games=sp.total_games, avg_win_rate=sp.avg_win_rate,
+            )
+            for sp in result.skill_paths
         ],
     )

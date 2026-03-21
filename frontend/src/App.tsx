@@ -649,10 +649,12 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!recommendFingerprint) return;
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       setRecommendLoading(true);
-      void recommendDraft(recommendPayload)
+      const payload = JSON.parse(recommendFingerprint);
+      void recommendDraft(payload)
         .then((bundle) => {
           if (!cancelled) {
             startTransition(() => {
@@ -663,7 +665,7 @@ export default function App() {
         .catch((error: unknown) => {
           if (!cancelled) {
             const msg = error instanceof Error ? error.message : String(error);
-            console.error("[recommend] failed:", msg, recommendPayload);
+            console.error("[recommend] failed:", msg, payload);
             setRecommendations(emptyRecommendations);
             setToastMessage({ text: `Recommendation failed: ${msg}`, tone: "error" });
           }
@@ -679,7 +681,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [recommendFingerprint, recommendPayload]);
+  }, [recommendFingerprint]);
 
   // Rune recommendation: triggers when local player has locked a champion
   const localSlotForRunes = useMemo(() => {
@@ -702,28 +704,23 @@ export default function App() {
   }, [localSlotForRunes, effectiveDraftState.enemy_team_picks, filters.rank_tier]);
 
   useEffect(() => {
-    if (!localSlotForRunes || !runeRequestFingerprint) {
+    if (!runeRequestFingerprint) {
       setRuneRecommendations(null);
       return;
     }
     let cancelled = false;
     const tid = window.setTimeout(() => {
       setRuneLoading(true);
-      const enemies = effectiveDraftState.enemy_team_picks
-        .filter((s) => s.champion_id > 0)
-        .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+      const { champion_id, role, enemies, rank_tier } = JSON.parse(runeRequestFingerprint);
       void recommendRunes({
-        champion_id: localSlotForRunes.champion_id,
-        role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
-        enemy_slots: enemies,
-        rank_tier: filters.rank_tier,
+        champion_id, role, enemy_slots: enemies, rank_tier,
       })
         .then((result) => { if (!cancelled) startTransition(() => setRuneRecommendations(result)); })
         .catch((err: unknown) => { if (!cancelled) console.error("[rune-recommend] failed:", err); })
         .finally(() => { if (!cancelled) setRuneLoading(false); });
     }, 300);
     return () => { cancelled = true; window.clearTimeout(tid); };
-  }, [runeRequestFingerprint, localSlotForRunes, effectiveDraftState.enemy_team_picks]);
+  }, [runeRequestFingerprint]);
 
   // Build recommendation: triggers when game is in progress
   const buildRequestFingerprint = useMemo(() => {
@@ -743,31 +740,25 @@ export default function App() {
   }, [inGame, localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id, filters.rank_tier]);
 
   useEffect(() => {
-    if (!buildRequestFingerprint || !localSlotForRunes) {
+    if (!buildRequestFingerprint) {
       setBuildRecommendation(null);
       return;
     }
     let cancelled = false;
     const tid = window.setTimeout(() => {
       setBuildLoading(true);
-      const enemies = effectiveDraftState.enemy_team_picks
-        .filter((s) => s.champion_id > 0)
-        .map((s) => ({ champion_id: s.champion_id, role: s.effective_role ?? s.assigned_role ?? "" }));
+      const { champion_id, role, keystone_id, enemies, rank_tier } = JSON.parse(buildRequestFingerprint);
       void recommendBuild({
-        champion_id: localSlotForRunes.champion_id,
-        role: localSlotForRunes.effective_role ?? localSlotForRunes.assigned_role ?? "",
-        keystone_id: playerRunes?.keystone_id ?? null,
-        enemy_slots: enemies,
-        rank_tier: filters.rank_tier,
+        champion_id, role, keystone_id, enemy_slots: enemies, rank_tier,
       })
         .then((result) => { if (!cancelled) startTransition(() => setBuildRecommendation(result)); })
         .catch((err: unknown) => { if (!cancelled) console.error("[build-recommend] failed:", err); })
         .finally(() => { if (!cancelled) setBuildLoading(false); });
     }, 300);
     return () => { cancelled = true; window.clearTimeout(tid); };
-  }, [buildRequestFingerprint, localSlotForRunes, effectiveDraftState.enemy_team_picks, playerRunes?.keystone_id]);
+  }, [buildRequestFingerprint]);
 
-  // Apply runes via Tauri command
+  // Apply runes (and optionally summoner spells) via Tauri commands
   const handleApplyRunes = async (keystoneId: number) => {
     if (!isTauriRuntime()) {
       setToastMessage({ text: "Rune apply requires Tauri runtime", tone: "error" });
@@ -801,7 +792,21 @@ export default function App() {
         sub_style_id: runePage.sub_style_id,
         selected_perk_ids: runePage.selected_perk_ids,
       });
-      setToastMessage({ text: "Runes applied successfully!", tone: "success" });
+
+      // Also apply summoner spells if available
+      const topSpell = runeRecommendations.summoner_spells?.[0];
+      if (topSpell) {
+        try {
+          await invoke("apply_summoner_spells", {
+            request: { spell1_id: topSpell.spell1_id, spell2_id: topSpell.spell2_id },
+          });
+          setToastMessage({ text: "Runes & Spells applied successfully!", tone: "success" });
+        } catch {
+          setToastMessage({ text: "Runes applied, but summoner spells failed (may not be in champ select)", tone: "success" });
+        }
+      } else {
+        setToastMessage({ text: "Runes applied successfully!", tone: "success" });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setToastMessage({ text: `Failed to apply runes: ${msg}`, tone: "error" });

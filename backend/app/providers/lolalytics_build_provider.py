@@ -66,6 +66,36 @@ class RuneStatEntry:
 
 
 @dataclass(slots=True)
+class SpellEntry:
+    """A summoner spell combination option."""
+    spell1_id: int
+    spell2_id: int
+    win_rate: float
+    pick_rate: float
+    games: int
+
+
+@dataclass(slots=True)
+class SkillEarlyLevel:
+    """Skill stats for a single level (1-3), with per-ability data."""
+    level: int  # 1-3
+    abilities: list[tuple[float, float, int]]  # (wr, pr, games) for Q, W, E, R
+
+
+@dataclass(slots=True)
+class SkillLevelPath:
+    """A complete skill path through level N with stats."""
+    sequence: str       # e.g. "123114"
+    abilities: list[str]  # decoded: ["Q","W","E","Q","Q","R"]
+    win_rate: float
+    pick_rate: float
+    games: int
+
+
+ABILITY_MAP: dict[str, str] = {"1": "Q", "2": "W", "3": "E", "4": "R"}
+
+
+@dataclass(slots=True)
 class MatchupBuildData:
     """All build/rune data for a champion (optionally vs a specific opponent)."""
     champion_id: int
@@ -84,6 +114,12 @@ class MatchupBuildData:
     rune_stats: list[RuneStatEntry] = field(default_factory=list)
     # Skill order
     skill_order: str | None = None
+    # Summoner spells
+    spells: list[SpellEntry] = field(default_factory=list)
+    # Skill leveling detail
+    skill_early: list[SkillEarlyLevel] = field(default_factory=list)
+    skill_paths_6: list[SkillLevelPath] = field(default_factory=list)
+    skill_paths_15: list[SkillLevelPath] = field(default_factory=list)
     # Overall matchup stats
     overall_win_rate: float = 0.0
     total_games: int = 0
@@ -348,6 +384,128 @@ def _parse_skill_order(objs: list, build_loader: dict) -> str | None:
     return None
 
 
+def _parse_spells(objs: list, build_loader: dict) -> list[SpellEntry]:
+    """Parse summoner spell combinations from the build loader."""
+    ref = build_loader.get("spells")
+    if not isinstance(ref, str):
+        return []
+    try:
+        arr = objs[_b36_decode(ref)]
+    except (ValueError, IndexError):
+        return []
+    if not isinstance(arr, list):
+        return []
+
+    entries: list[SpellEntry] = []
+    for item_ref in arr:
+        resolved = _deep_resolve(objs, item_ref)
+        if not isinstance(resolved, (list, dict)):
+            continue
+        if isinstance(resolved, list) and len(resolved) >= 4:
+            row = resolved
+        elif isinstance(resolved, dict):
+            row = [resolved.get(str(i)) for i in range(5)]
+        else:
+            continue
+        try:
+            spell_str = str(row[0])
+            parts = spell_str.split("_")
+            if len(parts) != 2:
+                continue
+            spell1 = int(parts[0])
+            spell2 = int(parts[1])
+            win_rate = float(row[1]) if row[1] is not None else 0.0
+            pick_rate = float(row[2]) if row[2] is not None else 0.0
+            games = int(row[3]) if row[3] is not None else 0
+        except (TypeError, ValueError):
+            continue
+        if games > 0:
+            entries.append(SpellEntry(
+                spell1_id=spell1,
+                spell2_id=spell2,
+                win_rate=win_rate,
+                pick_rate=pick_rate,
+                games=games,
+            ))
+    return entries
+
+
+def _parse_skill_early(objs: list, build_loader: dict) -> list[SkillEarlyLevel]:
+    """Parse per-level skill priority data (levels 1-3)."""
+    ref = build_loader.get("skillEarly")
+    if not isinstance(ref, str):
+        return []
+    try:
+        arr = objs[_b36_decode(ref)]
+    except (ValueError, IndexError):
+        return []
+    if not isinstance(arr, list):
+        return []
+
+    entries: list[SkillEarlyLevel] = []
+    for level_idx in range(min(3, len(arr))):
+        resolved = _deep_resolve(objs, arr[level_idx])
+        if not isinstance(resolved, list) or len(resolved) < 4:
+            continue
+        abilities: list[tuple[float, float, int]] = []
+        for ability_data in resolved[:4]:  # Q, W, E, R
+            if isinstance(ability_data, list) and len(ability_data) >= 3:
+                try:
+                    wr = float(ability_data[0])
+                    pr = float(ability_data[1])
+                    g = int(ability_data[2]) if isinstance(ability_data[2], (int, float)) else 0
+                    abilities.append((wr, pr, g))
+                except (TypeError, ValueError):
+                    abilities.append((0.0, 0.0, 0))
+            else:
+                abilities.append((0.0, 0.0, 0))
+        entries.append(SkillEarlyLevel(level=level_idx + 1, abilities=abilities))
+    return entries
+
+
+def _parse_skill_levels(objs: list, build_loader: dict, key: str) -> list[SkillLevelPath]:
+    """Parse detailed skill paths (skill6, skill15)."""
+    ref = build_loader.get(key)
+    if not isinstance(ref, str):
+        return []
+    try:
+        arr = objs[_b36_decode(ref)]
+    except (ValueError, IndexError):
+        return []
+    if not isinstance(arr, list):
+        return []
+
+    entries: list[SkillLevelPath] = []
+    for item_ref in arr[:5]:  # Top 5 paths
+        resolved = _deep_resolve(objs, item_ref)
+        if not isinstance(resolved, (list, dict)):
+            continue
+        if isinstance(resolved, list) and len(resolved) >= 4:
+            row = resolved
+        elif isinstance(resolved, dict):
+            row = [resolved.get(str(i)) for i in range(5)]
+        else:
+            continue
+        try:
+            seq_str = str(int(row[0]))
+            win_rate = float(row[1]) if row[1] is not None else 0.0
+            pick_rate = float(row[2]) if row[2] is not None else 0.0
+            games = int(row[3]) if row[3] is not None else 0
+        except (TypeError, ValueError):
+            continue
+        if games <= 0:
+            continue
+        abilities = [ABILITY_MAP.get(d, "?") for d in seq_str]
+        entries.append(SkillLevelPath(
+            sequence=seq_str,
+            abilities=abilities,
+            win_rate=win_rate,
+            pick_rate=pick_rate,
+            games=games,
+        ))
+    return entries
+
+
 def parse_qdata_json(raw: dict, champion_id: int, role: str,
                      opponent_id: int | None = None,
                      opponent_role: str | None = None) -> MatchupBuildData | None:
@@ -391,6 +549,10 @@ def parse_qdata_json(raw: dict, champion_id: int, role: str,
         item5=_parse_item_array(objs, build_loader, "item5"),
         rune_stats=_parse_rune_stats(objs, build_loader),
         skill_order=_parse_skill_order(objs, build_loader),
+        spells=_parse_spells(objs, build_loader),
+        skill_early=_parse_skill_early(objs, build_loader),
+        skill_paths_6=_parse_skill_levels(objs, build_loader, "skill6"),
+        skill_paths_15=_parse_skill_levels(objs, build_loader, "skill15"),
         overall_win_rate=overall_wr,
         total_games=total_n,
         patch=patch,

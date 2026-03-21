@@ -18,6 +18,7 @@ from app.services.recommender_shared import (
     LANE_OPPONENT_WEIGHT, JUNGLE_WEIGHT, DEFAULT_WEIGHT,
     MIN_GAMES_PER_MATCHUP, position_weight,
 )
+from app.services.build_recommender import SpellRecommendation, _aggregate_spells
 
 logger = logging.getLogger("lda.services.rune_recommender")
 
@@ -61,6 +62,7 @@ class RuneRecommendationResult:
     rune_pages: list[RunePageRecommendation]
     per_rune_stats: list[RuneStatAggregated]
     fallback_used: bool
+    summoner_spells: list[SpellRecommendation] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -241,8 +243,12 @@ async def recommend_runes(
             pick_rate=round(agg["pr_sum"] / agg["count"], 2) if agg["count"] > 0 else 0.0,
         ))
 
+    # Aggregate summoner spells from matchup data
+    summoner_spells = _aggregate_spells(matchup_pairs, role)
+
     return RuneRecommendationResult(
         rune_pages=rune_pages[:3],
         per_rune_stats=per_rune,
         fallback_used=fallback_used,
+        summoner_spells=summoner_spells,
     )
