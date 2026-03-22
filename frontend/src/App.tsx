@@ -68,6 +68,7 @@ const emptyRecommendations: RecommendationBundle = {
   scope_last_synced_at: null,
   scope_freshness: "unknown",
   fallback_used_recently: false,
+  team_composition_warnings: [],
   warnings: [],
   generated_at: new Date(0).toISOString(),
 };
