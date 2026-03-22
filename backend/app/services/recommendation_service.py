@@ -204,6 +204,8 @@ class RecommendationService:
         if not patch:
             return False
         await self._ensure_tier_scope_loaded(region=region, rank_tier=rank_tier, patch=patch, roles=set(SUPPORTED_ROLES))
+        if not self.metadata_index:
+            self.metadata_index = await self.repository.load_all_champion_metadata()
         if relation_roles:
             await self._ensure_matchup_scope_loaded(region=region, rank_tier=rank_tier, patch=patch, roles=relation_roles)
             await self._ensure_synergy_scope_loaded(region=region, rank_tier=rank_tier, patch=patch, roles=relation_roles)
