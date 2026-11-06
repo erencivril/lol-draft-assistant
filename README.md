@@ -1,8 +1,29 @@
 # LoL Draft Assistant
 
+[![CI](https://github.com/erencivril/lol-draft-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/erencivril/lol-draft-assistant/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 LoL Draft Assistant is a League of Legends champion select companion built around one goal: give fast, role-aware pick and ban recommendations from live draft context instead of static tier lists.
 
 The project combines a FastAPI backend, a React frontend, a Tauri desktop shell, Riot LCU integration, a remote bridge for cloud-hosted setups, and a data pipeline that scrapes Lolalytics into a local SQLite store.
+
+> **Disclaimer:** this is an unofficial fan project. It is not endorsed by Riot Games and does not reflect the views of Riot Games or anyone officially involved in producing or managing League of Legends. League of Legends and Riot Games are trademarks or registered trademarks of Riot Games, Inc. Champion metadata comes from Riot's public Data Dragon, and win rate, matchup and synergy numbers come from publicly available Lolalytics pages. The app only reads the local League Client API for champion select state.
+
+## Quick start with Docker
+
+This runs the API, the refresh worker and a Caddy reverse proxy on one machine. You need Docker with the compose plugin.
+
+```bash
+git clone https://github.com/erencivril/lol-draft-assistant.git
+cd lol-draft-assistant
+cp .env.example .env
+# set LDA_BRIDGE_TOKENS in .env if you plan to use the bridge
+docker compose -f ops/docker-compose.hetzner.yml up -d --build
+```
+
+Then open `http://localhost`. The first build takes a while because it installs Chromium for the Playwright fallback. The worker fills the SQLite database in the background, so the dataset can be empty or partial until the first refresh cycles finish. `docker compose -f ops/docker-compose.hetzner.yml logs -f worker` shows progress.
+
+The compose file turns off the local LCU connector on the server. To read a League Client running on your own PC, use the desktop shell or the bridge client described below.
 
 ## What it does
 
@@ -411,8 +432,11 @@ pytest
 
 ```bash
 cd frontend
-npm test
+npm run typecheck
+npm run test:run   # single run, `npm test` starts vitest in watch mode
 ```
+
+The same checks run in GitHub Actions on every push and pull request (`.github/workflows/ci.yml`). The Rust/Tauri shell is not built in CI.
 
 ### Production frontend build
 
@@ -511,4 +535,4 @@ That is why the project has:
 
 ## License
 
-No license file is included in this repository at the moment. Treat the project as all rights reserved unless a license is added.
+MIT. See [LICENSE](LICENSE).
