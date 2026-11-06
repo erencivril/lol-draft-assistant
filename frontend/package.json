@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc -b",
     "tauri": "powershell -ExecutionPolicy Bypass -File ./scripts/run-tauri.ps1"
   },
   "dependencies": {
